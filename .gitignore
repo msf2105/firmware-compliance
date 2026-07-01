@@ -1,0 +1,15 @@
+# runtime artifacts — keep dirs, ignore contents
+workflow/reports/*
+!workflow/reports/.gitkeep
+workflow/backups/*
+!workflow/backups/.gitkeep
+
+# venv / python junk
+.venv/
+__pycache__/
+*.pyc
+
+# never commit real secrets or filled inventories
+*.env
+.env
+secrets.yml

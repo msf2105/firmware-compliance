@@ -1,0 +1,56 @@
+---
+# asa_firmware — Cisco ASA version check + guarded boot-image change.
+- name: Gather ASA facts
+  cisco.asa.asa_facts:
+    gather_subset: [hardware]
+  vars:
+    ansible_user: "{{ dev_username }}"
+    ansible_password: "{{ dev_password }}"
+    ansible_become: true
+    ansible_become_method: enable
+    ansible_become_password: "{{ dev_enable | default(dev_password) }}"
+  register: _asa_facts
+
+- name: Determine ASA compliance
+  ansible.builtin.set_fact:
+    running_version: "{{ ansible_net_version | default(_asa_facts.ansible_facts.ansible_net_version) }}"
+    target_version: "{{ golden_versions.asa.version }}"
+    compliant: "{{ (ansible_net_version | default(_asa_facts.ansible_facts.ansible_net_version)) == golden_versions.asa.version }}"
+
+- name: Report ASA status
+  ansible.builtin.debug:
+    msg: "ASA {{ inventory_hostname }} running={{ running_version }} target={{ target_version }} compliant={{ compliant }}"
+
+- name: Upgrade ASA (guarded)
+  when:
+    - not (compliant | bool)
+    - apply_cleared | bool
+  vars:
+    ansible_user: "{{ dev_username }}"
+    ansible_password: "{{ dev_password }}"
+    ansible_become: true
+    ansible_become_method: enable
+    ansible_become_password: "{{ dev_enable | default(dev_password) }}"
+  block:
+    - name: Backup running config before change
+      cisco.asa.asa_config:
+        backup: true
+        backup_options:
+          dir_path: "{{ playbook_dir }}/../backups/{{ inventory_hostname }}"
+          filename: "pre-upgrade-{{ ansible_date_time.iso8601_basic_short | default('run') }}.cfg"
+
+    - name: Set boot image to golden
+      cisco.asa.asa_config:
+        lines:
+          - "boot system {{ golden_versions.asa.image_disk }}/{{ golden_versions.asa.image_file }}"
+        save_when: modified
+
+    - name: Reload to activate (only when reboot_after_upgrade)
+      cisco.asa.asa_command:
+        commands:
+          - command: "reload noconfirm"
+      when: reboot_after_upgrade | bool
+
+    - name: Record upgrade action
+      ansible.builtin.set_fact:
+        upgrade_action: "boot set to {{ target_version }}{{ ' + reload' if reboot_after_upgrade | bool else ' (reload deferred)' }}"

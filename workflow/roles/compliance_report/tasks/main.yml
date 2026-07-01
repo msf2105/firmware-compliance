@@ -1,0 +1,50 @@
+---
+# compliance_report — aggregate per-host results into a report artifact.
+# Runs once at the end (delegated to localhost) using hostvars from every host.
+- name: Build compliance record set
+  ansible.builtin.set_fact:
+    _report: >-
+      {{ groups['all']
+         | difference(['ungrouped'])
+         | map('extract', hostvars)
+         | selectattr('running_version','defined')
+         | map('combine', {'_placeholder': none})
+         | list }}
+  run_once: true
+  delegate_to: localhost
+
+- name: Assemble rows
+  ansible.builtin.set_fact:
+    _rows: >-
+      {{ _rows | default([]) + [ {
+          'host': item,
+          'platform': hostvars[item].platform_label | default('?'),
+          'running': hostvars[item].running_version | default('n/a'),
+          'target': hostvars[item].target_version | default('n/a'),
+          'compliant': hostvars[item].compliant | default(false),
+          'action': hostvars[item].upgrade_action | default('') } ] }}
+  loop: "{{ groups['all'] | difference(['ungrouped']) }}"
+  run_once: true
+  delegate_to: localhost
+  when: hostvars[item].running_version is defined
+
+- name: Print compliance table
+  ansible.builtin.debug:
+    msg: |
+      ================ FIRMWARE COMPLIANCE REPORT ================
+      Mode: {{ 'APPLY' if apply_updates | bool else 'DRY-RUN' }}   Change: {{ snow_change_number | default('none') }}
+      {% for r in _rows | default([]) %}
+      [{{ 'OK ' if r.compliant else 'DRIFT' }}] {{ '%-14s' | format(r.host) }} {{ '%-8s' | format(r.platform) }} run={{ r.running }} -> tgt={{ r.target }} {{ ('| ' + r.action) if r.action else '' }}
+      {% endfor %}
+      ===========================================================
+      Compliant: {{ _rows | default([]) | selectattr('compliant') | list | length }}/{{ _rows | default([]) | length }}
+  run_once: true
+  delegate_to: localhost
+
+- name: Write JSON report artifact
+  ansible.builtin.copy:
+    content: "{{ {'generated': ansible_date_time.iso8601 | default(lookup('pipe','date -Iseconds')), 'mode': ('apply' if apply_updates | bool else 'dry-run'), 'change': (snow_change_number | default('none')), 'results': (_rows | default([]))} | to_nice_json }}"
+    dest: "{{ playbook_dir }}/../reports/compliance-{{ ansible_date_time.iso8601_basic_short | default('run') }}.json"
+    mode: "0644"
+  run_once: true
+  delegate_to: localhost

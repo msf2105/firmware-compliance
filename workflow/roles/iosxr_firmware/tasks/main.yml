@@ -1,0 +1,52 @@
+---
+# iosxr_firmware — Cisco IOS-XR version check + guarded upgrade.
+- name: Gather IOS-XR facts
+  cisco.iosxr.iosxr_facts:
+    gather_subset: [hardware]
+  vars:
+    ansible_user: "{{ dev_username }}"
+    ansible_password: "{{ dev_password }}"
+  register: _xr_facts
+
+- name: Determine IOS-XR compliance
+  ansible.builtin.set_fact:
+    running_version: "{{ ansible_net_version | default(_xr_facts.ansible_facts.ansible_net_version) }}"
+    target_version: "{{ golden_versions.iosxr.version }}"
+    compliant: "{{ (ansible_net_version | default(_xr_facts.ansible_facts.ansible_net_version)) == golden_versions.iosxr.version }}"
+
+- name: Report IOS-XR status
+  ansible.builtin.debug:
+    msg: "IOS-XR {{ inventory_hostname }} running={{ running_version }} target={{ target_version }} compliant={{ compliant }}"
+
+- name: Upgrade IOS-XR (guarded)
+  when:
+    - not (compliant | bool)
+    - apply_cleared | bool
+  vars:
+    ansible_user: "{{ dev_username }}"
+    ansible_password: "{{ dev_password }}"
+  block:
+    - name: Backup running config before change
+      cisco.iosxr.iosxr_config:
+        backup: true
+        backup_options:
+          dir_path: "{{ playbook_dir }}/../backups/{{ inventory_hostname }}"
+          filename: "pre-upgrade-{{ ansible_date_time.iso8601_basic_short | default('run') }}.cfg"
+
+    # IOS-XR uses install add/activate/commit. Screen-scrape via iosxr_command
+    # because install workflow is version-dependent; verify prompts per release.
+    - name: install add source
+      cisco.iosxr.iosxr_command:
+        commands:
+          - "install add source /harddisk: {{ golden_versions.iosxr.image_file }}"
+      register: _xr_add
+
+    - name: install activate golden version
+      cisco.iosxr.iosxr_command:
+        commands:
+          - command: "install activate {{ golden_versions.iosxr.version }} noprompt"
+      when: reboot_after_upgrade | bool
+
+    - name: Record upgrade action
+      ansible.builtin.set_fact:
+        upgrade_action: "install add {{ target_version }}{{ ' + activate' if reboot_after_upgrade | bool else ' (activate deferred)' }}"

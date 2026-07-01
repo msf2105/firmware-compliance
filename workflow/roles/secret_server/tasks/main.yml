@@ -1,0 +1,40 @@
+---
+# =====================================================================
+# secret_server — resolve device credentials from Delinea/Thycotic
+# Secret Server at run time. Sets host-scoped facts:
+#   dev_username, dev_password, and (when present) dev_enable.
+# No secret VALUE is ever written to inventory or disk. Requires each host
+# to define `secret_id` (the Secret Server secret ID for that device).
+#
+# Uses the community.general.tss lookup (python-tss-sdk). Auth to Secret
+# Server itself uses env vars so nothing lands in the repo:
+#   TSS_BASE_URL, TSS_USERNAME, TSS_PASSWORD   (or TSS_TOKEN for a token)
+# The lookup ALSO reads these env vars natively, but we pass base_url
+# explicitly from inventory so the SoT stays visible.
+# =====================================================================
+
+- name: Assert this host has a secret_id
+  ansible.builtin.assert:
+    that:
+      - secret_id is defined
+      - secret_id | int > 0
+    fail_msg: "Host {{ inventory_hostname }} is missing 'secret_id' — cannot fetch credentials."
+  delegate_to: localhost
+
+- name: Fetch device secret from Secret Server
+  ansible.builtin.set_fact:
+    _tss_secret: >-
+      {{ lookup('community.general.tss',
+                secret_id,
+                base_url=tss_base_url,
+                username=lookup('env', 'TSS_USERNAME'),
+                password=lookup('env', 'TSS_PASSWORD')) }}
+  delegate_to: localhost
+  no_log: true
+
+- name: Map Secret Server fields into device credential facts
+  ansible.builtin.set_fact:
+    dev_username: "{{ _tss_secret['items'] | selectattr('slug', 'equalto', 'username') | map(attribute='itemValue') | first }}"
+    dev_password: "{{ _tss_secret['items'] | selectattr('slug', 'equalto', 'password') | map(attribute='itemValue') | first }}"
+    dev_enable: "{{ (_tss_secret['items'] | selectattr('slug', 'equalto', 'enable-password') | map(attribute='itemValue') | list | first) | default(omit) }}"
+  no_log: true

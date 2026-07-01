@@ -1,0 +1,123 @@
+---
+# =====================================================================
+# site.yml — multi-platform firmware compliance orchestrator.
+#
+# Flow:
+#   Play 1 (localhost)  Optionally open a ServiceNow change request.
+#   Play 2 (devices)    Per host: fetch creds from Secret Server, run the
+#                       preflight safety gate, then dispatch the platform
+#                       role by group membership. Each role AUDITS always
+#                       and only UPGRADES when apply_cleared is true.
+#   Play 3 (localhost)  Build the compliance report + close the change.
+#
+# SAFETY: dry-run (audit-only) is the DEFAULT. A real firmware push needs,
+# all at once:  -e apply_updates=true  AND  inside the maintenance window
+# AND (by default) a ServiceNow change ticket. Miss any one -> audit only.
+#
+# Usage:
+#   Audit everything (safe, default):
+#     ansible-playbook playbooks/site.yml
+#   Audit a single platform:
+#     ansible-playbook playbooks/site.yml --limit nxos
+#   Real remediation (inside window, opens/closes a SNOW change):
+#     ansible-playbook playbooks/site.yml -e apply_updates=true
+#
+# Required env (never stored in repo):
+#   TSS_USERNAME / TSS_PASSWORD        Delinea Secret Server auth
+#   SNOW_INSTANCE / SNOW_USERNAME / SNOW_PASSWORD   ServiceNow auth
+# =====================================================================
+
+# ---------- Play 1: open the change record (apply mode only) ----------
+- name: Open ServiceNow change (apply mode)
+  hosts: localhost
+  gather_facts: true
+  vars_files:
+    - ../vars/golden_versions.yml
+  tasks:
+    - name: Open change request when applying updates
+      when:
+        - apply_updates | bool
+        - require_change_ticket | bool
+      ansible.builtin.include_role:
+        name: servicenow
+      vars:
+        snow_action: open
+
+    - name: Publish change identifiers to all device hosts
+      when: snow_change_number is defined
+      ansible.builtin.add_host:
+        name: "{{ item }}"
+        snow_change_sys_id: "{{ snow_change_sys_id }}"
+        snow_change_number: "{{ snow_change_number }}"
+      loop: "{{ groups['all'] | difference(['ungrouped', 'localhost']) }}"
+      changed_when: false
+
+# ---------- Play 2: per-device audit + guarded remediation ----------
+- name: Firmware compliance across all platforms
+  hosts: >-
+    ios:iosxr:nxos:asa:aci:dnac:ise:ucs:panos:f5
+  gather_facts: false
+  vars_files:
+    - ../vars/golden_versions.yml
+  # keep going even if one platform errors — we still want a full report
+  any_errors_fatal: false
+  tasks:
+    - name: Resolve device credentials from Secret Server
+      ansible.builtin.include_role:
+        name: secret_server
+
+    - name: Run preflight safety gate
+      ansible.builtin.include_role:
+        name: preflight
+
+    - name: Dispatch platform firmware role by group membership
+      ansible.builtin.include_role:
+        name: "{{ item }}_firmware"
+      # group_names holds every group this host belongs to; the intersection
+      # with our known platforms selects exactly one role per host.
+      loop: "{{ group_names | intersect(['ios','iosxr','nxos','asa','aci','dnac','ise','ucs','panos','f5']) }}"
+
+    - name: Add per-device result work note to change (apply mode)
+      when:
+        - snow_change_sys_id is defined
+        - snow_change_number is defined
+      ansible.builtin.include_role:
+        name: servicenow
+      vars:
+        snow_action: note
+        snow_note: >-
+          {{ inventory_hostname }} [{{ platform_label | default('?') }}]
+          running={{ running_version | default('n/a') }}
+          target={{ target_version | default('n/a') }}
+          compliant={{ compliant | default('n/a') }}
+          {{ ('action=' + upgrade_action) if (upgrade_action is defined) else '' }}
+
+# ---------- Play 3: aggregate report + close the change ----------
+- name: Build compliance report and close change
+  hosts: localhost
+  gather_facts: true
+  vars_files:
+    - ../vars/golden_versions.yml
+  tasks:
+    - name: Ensure reports directory exists
+      ansible.builtin.file:
+        path: "{{ playbook_dir }}/../reports"
+        state: directory
+        mode: "0755"
+
+    - name: Generate aggregated compliance report
+      ansible.builtin.include_role:
+        name: compliance_report
+
+    - name: Close ServiceNow change (apply mode)
+      when:
+        - snow_change_sys_id is defined
+        - snow_change_number is defined
+      ansible.builtin.include_role:
+        name: servicenow
+      vars:
+        snow_action: close
+        snow_close_code: successful
+        snow_close_notes: >-
+          Firmware compliance run complete. See attached Ansible report artifact
+          under reports/. Mode: {{ 'APPLY' if apply_updates | bool else 'DRY-RUN' }}.

@@ -1,0 +1,45 @@
+---
+# nxos_firmware — Cisco NX-OS version check + guarded upgrade.
+- name: Gather NX-OS facts
+  cisco.nxos.nxos_facts:
+    gather_subset: [hardware]
+  vars:
+    ansible_user: "{{ dev_username }}"
+    ansible_password: "{{ dev_password }}"
+  register: _nx_facts
+
+- name: Determine NX-OS compliance
+  ansible.builtin.set_fact:
+    running_version: "{{ ansible_net_version | default(_nx_facts.ansible_facts.ansible_net_version) }}"
+    target_version: "{{ golden_versions.nxos.version }}"
+    compliant: "{{ (ansible_net_version | default(_nx_facts.ansible_facts.ansible_net_version)) == golden_versions.nxos.version }}"
+
+- name: Report NX-OS status
+  ansible.builtin.debug:
+    msg: "NX-OS {{ inventory_hostname }} running={{ running_version }} target={{ target_version }} compliant={{ compliant }}"
+
+- name: Upgrade NX-OS (guarded)
+  when:
+    - not (compliant | bool)
+    - apply_cleared | bool
+  vars:
+    ansible_user: "{{ dev_username }}"
+    ansible_password: "{{ dev_password }}"
+  block:
+    - name: Backup running config before change
+      cisco.nxos.nxos_config:
+        backup: true
+        backup_options:
+          dir_path: "{{ playbook_dir }}/../backups/{{ inventory_hostname }}"
+          filename: "pre-upgrade-{{ ansible_date_time.iso8601_basic_short | default('run') }}.cfg"
+
+    # nxos_install_os handles copy + install-all + reload orchestration.
+    - name: Install NX-OS golden image
+      cisco.nxos.nxos_install_os:
+        system_image_file: "{{ golden_versions.nxos.image_file }}"
+      register: _nx_install
+      when: reboot_after_upgrade | bool
+
+    - name: Record upgrade action
+      ansible.builtin.set_fact:
+        upgrade_action: "nxos_install_os -> {{ target_version }}{{ '' if reboot_after_upgrade | bool else ' (install deferred: reboot_after_upgrade=false)' }}"

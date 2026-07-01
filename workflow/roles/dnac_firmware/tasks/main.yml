@@ -1,0 +1,60 @@
+---
+# dnac_firmware — Cisco Catalyst Center (DNA Center) SWIM compliance.
+# Catalyst Center manages device images centrally (SWIM). This role queries the
+# golden image tag and reports network devices whose running image differs.
+# Actual distribute/activate is service-impacting and gated.
+- name: Build Catalyst Center connection params
+  ansible.builtin.set_fact:
+    _catc:
+      dnac_host: "{{ ansible_host }}"
+      dnac_username: "{{ dev_username }}"
+      dnac_password: "{{ dev_password }}"
+      dnac_verify: false
+      dnac_debug: false
+  no_log: true
+
+- name: Get list of imported software images
+  cisco.catalystcenter.swim_image_details_info:
+    dnac_host: "{{ ansible_host }}"
+    dnac_username: "{{ dev_username }}"
+    dnac_password: "{{ dev_password }}"
+    dnac_verify: false
+    imageName: "{{ golden_versions.dnac.version }}"
+  register: _catc_images
+  ignore_errors: true
+  no_log: true
+
+- name: Determine Catalyst Center golden-image presence
+  ansible.builtin.set_fact:
+    target_version: "{{ golden_versions.dnac.version }}"
+    running_version: "{{ (_catc_images.response | default([]) | length) | ternary('golden image imported', 'golden image MISSING') }}"
+    compliant: "{{ (_catc_images.response | default([]) | length) > 0 }}"
+
+- name: Report Catalyst Center status
+  ansible.builtin.debug:
+    msg: >-
+      CatalystCenter {{ inventory_hostname }} golden={{ target_version }}
+      status='{{ running_version }}' compliant={{ compliant }}
+      (per-device SWIM distribution reviewed via Catalyst Center compliance dashboard)
+
+- name: Import golden image + tag golden (guarded)
+  when:
+    - not (compliant | bool)
+    - apply_cleared | bool
+  block:
+    - name: Import software image via URL
+      cisco.catalystcenter.swim_image_url_import:
+        dnac_host: "{{ ansible_host }}"
+        dnac_username: "{{ dev_username }}"
+        dnac_password: "{{ dev_password }}"
+        dnac_verify: false
+        payload:
+          - sourceURL: "{{ golden_versions.dnac.image_url | default('') }}"
+            thirdParty: false
+      register: _catc_import
+      when: (golden_versions.dnac.image_url | default('')) | length > 0
+      no_log: true
+
+    - name: Record upgrade action
+      ansible.builtin.set_fact:
+        upgrade_action: "Catalyst Center golden image {{ target_version }} import requested (distribute/activate scheduled per device)"

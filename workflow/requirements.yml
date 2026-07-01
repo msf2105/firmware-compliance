@@ -1,0 +1,37 @@
+---
+# Firmware compliance workflow — collection dependencies.
+# Install: ansible-galaxy collection install -r requirements.yml
+collections:
+  - name: cisco.ios
+    version: ">=11.4.2"
+  - name: cisco.iosxr
+    version: ">=12.3.2"
+  - name: cisco.nxos
+    version: ">=11.2.0"
+  - name: cisco.asa
+    version: ">=6.1.0"
+  - name: cisco.aci
+    version: ">=2.13.0"
+  - name: cisco.catalystcenter   # Cisco DNA Center / Catalyst Center
+    version: ">=2.9.2"
+  - name: cisco.ise
+    version: ">=3.2.0"
+  - name: cisco.ucs
+    version: ">=1.16.0"
+  - name: paloaltonetworks.panos
+    version: ">=3.4.0"
+  - name: f5networks.f5_modules
+    version: ">=1.42.0"
+  - name: servicenow.itsm
+    version: ">=2.15.1"
+  - name: community.general      # provides the tss (Secret Server) lookup
+    version: ">=13.1.0"
+  - name: delinea.core           # Delinea DevOps Secrets Vault (optional/alt path)
+    version: ">=1.1.0"
+  - name: ansible.netcommon
+    version: ">=8.5.3"
+  - name: ansible.utils
+    version: ">=6.0.3"
+# NOTE: Secret Server access uses the community.general.tss lookup, which
+# requires the python-tss-sdk on the controller / Semaphore runner:
+#   pip install python-tss-sdk

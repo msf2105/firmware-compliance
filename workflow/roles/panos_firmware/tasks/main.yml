@@ -1,0 +1,49 @@
+---
+# panos_firmware — Palo Alto PAN-OS version check + guarded upgrade.
+- name: Build PAN-OS provider
+  ansible.builtin.set_fact:
+    _pan_provider:
+      ip_address: "{{ ansible_host }}"
+      username: "{{ dev_username }}"
+      password: "{{ dev_password }}"
+  no_log: true
+
+- name: Gather PAN-OS system info
+  paloaltonetworks.panos.panos_facts:
+    provider: "{{ _pan_provider }}"
+    gather_subset: [system]
+  register: _pan_facts
+
+- name: Determine PAN-OS compliance
+  ansible.builtin.set_fact:
+    running_version: "{{ _pan_facts.ansible_facts.ansible_net_version | default(ansible_net_version) }}"
+    target_version: "{{ golden_versions.panos.version }}"
+    compliant: "{{ (_pan_facts.ansible_facts.ansible_net_version | default(ansible_net_version)) == golden_versions.panos.version }}"
+
+- name: Report PAN-OS status
+  ansible.builtin.debug:
+    msg: "PAN-OS {{ inventory_hostname }} running={{ running_version }} target={{ target_version }} compliant={{ compliant }}"
+
+- name: Upgrade PAN-OS (guarded)
+  when:
+    - not (compliant | bool)
+    - apply_cleared | bool
+  block:
+    - name: Export/backup current config
+      paloaltonetworks.panos.panos_export:
+        provider: "{{ _pan_provider }}"
+        category: configuration
+        filename: "{{ playbook_dir }}/../backups/{{ inventory_hostname }}/pre-upgrade-{{ ansible_date_time.iso8601_basic_short | default('run') }}.xml"
+
+    - name: Download + install target PAN-OS and reboot
+      paloaltonetworks.panos.panos_software:
+        provider: "{{ _pan_provider }}"
+        version: "{{ golden_versions.panos.version }}"
+        download: true
+        install: true
+        restart: "{{ reboot_after_upgrade | bool }}"
+      register: _pan_sw
+
+    - name: Record upgrade action
+      ansible.builtin.set_fact:
+        upgrade_action: "panos_software -> {{ target_version }} download+install{{ ' + restart' if reboot_after_upgrade | bool else ' (restart deferred)' }}"

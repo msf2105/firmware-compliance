@@ -1,0 +1,48 @@
+---
+# ise_firmware — Cisco ISE version/patch compliance.
+# ISE upgrades are node-persona-aware and NOT safely automatable via a single
+# module call; this role AUDITS the running version + patch level against the
+# golden target and reports. Remediation is intentionally report-only: it opens
+# a ServiceNow note recommending the ISE upgrade runbook rather than pushing.
+- name: Query ISE node/version info
+  cisco.ise.node_services_profiler_probe_config_info:
+    ise_hostname: "{{ ansible_host }}"
+    ise_username: "{{ dev_username }}"
+    ise_password: "{{ dev_password }}"
+    ise_verify: false
+    hostname: "{{ inventory_hostname }}"
+  register: _ise_info
+  ignore_errors: true
+  no_log: true
+
+# The version endpoint varies by ISE release; use the versioninfo op if present.
+- name: Query ISE version info (best effort)
+  cisco.ise.backup_last_status_info:
+    ise_hostname: "{{ ansible_host }}"
+    ise_username: "{{ dev_username }}"
+    ise_password: "{{ dev_password }}"
+    ise_verify: false
+  register: _ise_ver
+  ignore_errors: true
+  no_log: true
+
+- name: Determine ISE compliance target (audit-only)
+  ansible.builtin.set_fact:
+    target_version: "{{ golden_versions.ise.version }} patch {{ golden_versions.ise.patch }}"
+    running_version: "{{ _ise_ver.response.version | default('query via ISE admin / GUI — see note') }}"
+    compliant: "{{ (_ise_ver.response.version | default('')) == golden_versions.ise.version }}"
+
+- name: Report ISE status
+  ansible.builtin.debug:
+    msg: >-
+      ISE {{ inventory_hostname }} running={{ running_version }}
+      target={{ target_version }} compliant={{ compliant }}
+      (ISE remediation is report-only: follow the ISE upgrade runbook — persona-aware)
+
+- name: Flag ISE non-compliance for manual runbook (guarded note)
+  when:
+    - not (compliant | bool)
+    - require_change_ticket | bool
+    - snow_change_sys_id is defined
+  ansible.builtin.set_fact:
+    upgrade_action: "ISE {{ inventory_hostname }} non-compliant (target {{ target_version }}) — manual upgrade runbook required, no automated push."

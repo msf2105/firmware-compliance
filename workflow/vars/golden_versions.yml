@@ -1,0 +1,51 @@
+---
+# =====================================================================
+# Golden firmware targets — the desired ("compliant") version per platform.
+# Edit these to match your approved software matrix. A device whose running
+# version != the golden version here is flagged non-compliant, and (only when
+# apply_updates=true and inside the maintenance window) upgraded toward it.
+#
+# `image_file` / `image_url` point at where the installer image lives on the
+# device or a reachable server. Leave blank for platforms you only want to
+# AUDIT (check-only) rather than remediate.
+# =====================================================================
+
+golden_versions:
+  ios:
+    version: "17.09.05"
+    image_file: "cat9k_iosxe.17.09.05.SPA.bin"
+    image_disk: "flash:"
+  iosxr:
+    version: "7.11.2"
+    image_file: "ncs540-x64-7.11.2.iso"
+  nxos:
+    version: "10.3(5)"
+    image_file: "nxos64-cs.10.3.5.M.bin"
+  asa:
+    version: "9.20.3"
+    image_file: "asa9-20-3-lfbff-k8.SPA"
+    image_disk: "disk0:"
+  aci:
+    # APIC controller + switch fabric firmware (managed via firmware policy)
+    apic_version: "6.0(5h)"
+    switch_version: "16.0(5h)"
+  dnac:
+    # Catalyst Center manages device SWIM images; target the golden tag/version
+    version: "17.09.05"
+  ise:
+    version: "3.3.0.430"
+    patch: "3"
+  ucs:
+    # UCS Manager infrastructure bundle
+    version: "4.3(4a)"
+    infra_bundle: "ucs-k9-bundle-infra.4.3.4a.A.bin"
+  panos:
+    version: "11.1.4-h7"
+  f5:
+    version: "17.1.1.3"
+    image_file: "BIGIP-17.1.1.3-0.0.5.iso"
+
+# Global switches (overridable at run time with -e)
+apply_updates: false          # DRY-RUN by default. true = actually push firmware.
+require_change_ticket: true   # every apply must be wrapped in a SNOW change record
+reboot_after_upgrade: false   # most platforms need a reload to activate; gate it

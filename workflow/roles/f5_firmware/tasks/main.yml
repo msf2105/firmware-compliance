@@ -1,0 +1,54 @@
+---
+# f5_firmware — F5 BIG-IP version check + guarded volume install.
+- name: Build F5 provider
+  ansible.builtin.set_fact:
+    _f5_provider:
+      server: "{{ ansible_host }}"
+      user: "{{ dev_username }}"
+      password: "{{ dev_password }}"
+      server_port: 443
+      validate_certs: false
+  no_log: true
+
+- name: Gather BIG-IP device info
+  f5networks.f5_modules.bigip_device_info:
+    provider: "{{ _f5_provider }}"
+    gather_subset: [system-info]
+  register: _f5_info
+
+- name: Determine F5 compliance
+  ansible.builtin.set_fact:
+    running_version: "{{ _f5_info.system_info.product_version | default('unknown') }}"
+    target_version: "{{ golden_versions.f5.version }}"
+    compliant: "{{ (_f5_info.system_info.product_version | default('unknown')) == golden_versions.f5.version }}"
+
+- name: Report F5 status
+  ansible.builtin.debug:
+    msg: "BIG-IP {{ inventory_hostname }} running={{ running_version }} target={{ target_version }} compliant={{ compliant }}"
+
+- name: Upgrade F5 (guarded)
+  when:
+    - not (compliant | bool)
+    - apply_cleared | bool
+  block:
+    - name: Save/backup current config (UCS archive)
+      f5networks.f5_modules.bigip_ucs_fetch:
+        provider: "{{ _f5_provider }}"
+        src: "pre-upgrade-{{ ansible_date_time.iso8601_basic_short | default('run') }}.ucs"
+        dest: "{{ playbook_dir }}/../backups/{{ inventory_hostname }}/pre-upgrade-{{ ansible_date_time.iso8601_basic_short | default('run') }}.ucs"
+
+    - name: Upload golden BIG-IP image
+      f5networks.f5_modules.bigip_software_image:
+        provider: "{{ _f5_provider }}"
+        image: "{{ playbook_dir }}/../images/{{ golden_versions.f5.image_file }}"
+
+    - name: Install image to inactive volume
+      f5networks.f5_modules.bigip_software_install:
+        provider: "{{ _f5_provider }}"
+        image: "{{ golden_versions.f5.image_file }}"
+        state: "{{ 'activated' if reboot_after_upgrade | bool else 'installed' }}"
+      register: _f5_install
+
+    - name: Record upgrade action
+      ansible.builtin.set_fact:
+        upgrade_action: "software_install -> {{ target_version }} state={{ 'activated' if reboot_after_upgrade | bool else 'installed' }}"

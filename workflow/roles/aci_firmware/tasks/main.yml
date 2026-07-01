@@ -1,0 +1,61 @@
+---
+# aci_firmware — Cisco ACI (APIC) controller + switch firmware compliance.
+# ACI firmware is policy-driven: a firmware group + maintenance group point at
+# a target version. We check the running APIC version and (guarded) set the
+# controller/maintenance firmware policy to the golden target.
+- name: Build APIC connection params
+  ansible.builtin.set_fact:
+    _aci_conn:
+      host: "{{ ansible_host }}"
+      username: "{{ dev_username }}"
+      password: "{{ dev_password }}"
+      use_proxy: false
+      validate_certs: false
+  no_log: true
+
+- name: Query APIC controller firmware (running)
+  cisco.aci.aci_rest:
+    host: "{{ ansible_host }}"
+    username: "{{ dev_username }}"
+    password: "{{ dev_password }}"
+    validate_certs: false
+    use_proxy: false
+    method: get
+    path: /api/node/class/firmwareCtrlrRunning.json
+  register: _aci_running
+  no_log: true
+
+- name: Determine ACI compliance
+  ansible.builtin.set_fact:
+    running_version: "{{ (_aci_running.imdata | default([]) | map(attribute='firmwareCtrlrRunning.attributes.version') | list | first) | default('unknown') }}"
+    target_version: "{{ golden_versions.aci.apic_version }}"
+
+- name: Compute ACI compliance flag
+  ansible.builtin.set_fact:
+    compliant: "{{ running_version == target_version }}"
+
+- name: Report ACI status
+  ansible.builtin.debug:
+    msg: "APIC {{ inventory_hostname }} running={{ running_version }} target={{ target_version }} compliant={{ compliant }}"
+
+- name: Set ACI controller firmware policy (guarded)
+  when:
+    - not (compliant | bool)
+    - apply_cleared | bool
+  block:
+    - name: Point controller firmware policy at golden version
+      cisco.aci.aci_firmware_policy:
+        host: "{{ ansible_host }}"
+        username: "{{ dev_username }}"
+        password: "{{ dev_password }}"
+        validate_certs: false
+        use_proxy: false
+        name: "compliance-golden"
+        version: "{{ golden_versions.aci.switch_version }}"
+        ignore_compat: false
+      register: _aci_fw
+      no_log: true
+
+    - name: Record upgrade action
+      ansible.builtin.set_fact:
+        upgrade_action: "ACI firmware policy set to switch {{ golden_versions.aci.switch_version }} / apic {{ target_version }} (scheduler activates)"

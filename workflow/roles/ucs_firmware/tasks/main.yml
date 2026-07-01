@@ -1,0 +1,55 @@
+---
+# ucs_firmware — Cisco UCS Manager infrastructure bundle check.
+# Version comparison + firmware auto-install (guarded). UCS firmware upgrade
+# is a multi-stage, service-impacting operation; this role AUDITS by default
+# and only stages the infra bundle activation when cleared + reboot allowed.
+
+- name: Query running UCS Manager version
+  cisco.ucs.ucs_query:
+    hostname: "{{ ansible_host }}"
+    username: "{{ dev_username }}"
+    password: "{{ dev_password }}"
+    use_proxy: false
+    class_ids: firmwareRunning
+  register: _ucs_running
+  ignore_errors: true
+  no_log: true
+
+- name: Determine UCS compliance (best-effort parse)
+  ansible.builtin.set_fact:
+    running_version: "{{ (_ucs_running.objects | default([]) | selectattr('deployment','defined') | selectattr('deployment','equalto','system') | map(attribute='version') | list | first) | default('unknown') }}"
+    target_version: "{{ golden_versions.ucs.version }}"
+
+- name: Compute UCS compliance flag
+  ansible.builtin.set_fact:
+    compliant: "{{ running_version == target_version }}"
+
+- name: Report UCS status
+  ansible.builtin.debug:
+    msg: "UCSM {{ inventory_hostname }} running={{ running_version }} target={{ target_version }} compliant={{ compliant }}"
+
+- name: Stage UCS infra firmware (guarded)
+  when:
+    - not (compliant | bool)
+    - apply_cleared | bool
+    - reboot_after_upgrade | bool     # UCS activation is service-impacting
+  block:
+    - name: Set auto-install infrastructure firmware to golden bundle
+      cisco.ucs.ucs_managed_objects:
+        hostname: "{{ ansible_host }}"
+        username: "{{ dev_username }}"
+        password: "{{ dev_password }}"
+        use_proxy: false
+        objects:
+          - module: ucsmsdk.mometa.firmware.FirmwareInfraPack
+            class: FirmwareInfraPack
+            properties:
+              parent_mo_or_dn: "org-root"
+              name: "default"
+              infra_bundle_version: "{{ golden_versions.ucs.version }}"
+      register: _ucs_fw
+      no_log: true
+
+    - name: Record upgrade action
+      ansible.builtin.set_fact:
+        upgrade_action: "UCS infra pack set to {{ target_version }} (auto-install triggered)"
