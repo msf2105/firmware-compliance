@@ -1,0 +1,9 @@
+---
+all:
+  children:
+    test_devices:
+      hosts:
+        ok-device:
+          ansible_connection: local
+        missing-device:
+          ansible_connection: local

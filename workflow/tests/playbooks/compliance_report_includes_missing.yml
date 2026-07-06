@@ -1,0 +1,39 @@
+---
+- name: Seed one successful audit result
+  hosts: ok-device
+  gather_facts: false
+  tasks:
+    - name: Record successful audit facts
+      ansible.builtin.set_fact:
+        platform_label: TEST
+        running_version: "1.0"
+        target_version: "1.0"
+        compliant: true
+
+- name: Verify report keeps hosts without audit facts
+  hosts: localhost
+  gather_facts: false
+  vars:
+    apply_updates: false
+  tasks:
+    - name: Ensure isolated test reports directory exists
+      ansible.builtin.file:
+        path: "{{ playbook_dir }}/../reports"
+        state: directory
+        mode: "0755"
+
+    - name: Generate report rows
+      ansible.builtin.include_role:
+        name: compliance_report
+
+    - name: Capture missing host row
+      ansible.builtin.set_fact:
+        _missing_row: "{{ _rows | selectattr('host', 'equalto', 'missing-device') | list | first }}"
+
+    - name: Assert missing host is reported as an error
+      ansible.builtin.assert:
+        that:
+          - _rows | length == 2
+          - _missing_row.status == 'error'
+          - not (_missing_row.compliant | bool)
+          - _missing_row.action == 'audit did not complete'
