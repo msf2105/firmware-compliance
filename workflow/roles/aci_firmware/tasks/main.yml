@@ -51,11 +51,11 @@
         validate_certs: false
         use_proxy: false
         name: "compliance-golden"
-        version: "{{ golden_versions.aci.switch_version }}"
+        version: "{{ target_version }}"
         ignore_compat: false
       register: _aci_fw
       no_log: true
 
     - name: Record upgrade action
       ansible.builtin.set_fact:
-        upgrade_action: "ACI firmware policy set to switch {{ golden_versions.aci.switch_version }} / apic {{ target_version }} (scheduler activates)"
+        upgrade_action: "ACI controller firmware policy set to APIC {{ target_version }} (scheduler activates)"

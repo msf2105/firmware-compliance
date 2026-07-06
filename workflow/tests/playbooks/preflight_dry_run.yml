@@ -1,0 +1,13 @@
+---
+- name: Preflight computes dry-run mode without direct override
+  hosts: test_devices
+  gather_facts: false
+  vars_files:
+    - ../../vars/golden_versions.yml
+  roles:
+    - role: preflight
+  tasks:
+    - name: Assert dry-run is not apply-cleared
+      ansible.builtin.assert:
+        that:
+          - not (apply_cleared | bool)
