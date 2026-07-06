@@ -16,6 +16,12 @@
   vars:
     apply_updates: false
   tasks:
+    - name: Ensure isolated test reports directory exists
+      ansible.builtin.file:
+        path: "{{ playbook_dir }}/../reports"
+        state: directory
+        mode: "0755"
+
     - name: Generate report rows
       ansible.builtin.include_role:
         name: compliance_report
