@@ -32,12 +32,16 @@
     ansible_become_method: enable
     ansible_become_password: "{{ dev_enable | default(dev_password) }}"
   block:
+    - name: Stamp this IOS backup
+      ansible.builtin.set_fact:
+        _backup_timestamp: "{{ lookup('pipe', 'date -u +%Y%m%dT%H%M%S%NZ') }}"
+
     - name: Backup running config before change
       cisco.ios.ios_config:
         backup: true
         backup_options:
           dir_path: "{{ playbook_dir }}/../backups/{{ inventory_hostname }}"
-          filename: "pre-upgrade-{{ ansible_date_time.iso8601_basic_short | default('run') }}.cfg"
+          filename: "pre-upgrade-{{ _backup_timestamp }}.cfg"
 
     - name: Set boot system to golden image
       cisco.ios.ios_config:

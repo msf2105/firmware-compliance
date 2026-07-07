@@ -26,12 +26,16 @@
     ansible_user: "{{ dev_username }}"
     ansible_password: "{{ dev_password }}"
   block:
+    - name: Stamp this IOS-XR backup
+      ansible.builtin.set_fact:
+        _backup_timestamp: "{{ lookup('pipe', 'date -u +%Y%m%dT%H%M%S%NZ') }}"
+
     - name: Backup running config before change
       cisco.iosxr.iosxr_config:
         backup: true
         backup_options:
           dir_path: "{{ playbook_dir }}/../backups/{{ inventory_hostname }}"
-          filename: "pre-upgrade-{{ ansible_date_time.iso8601_basic_short | default('run') }}.cfg"
+          filename: "pre-upgrade-{{ _backup_timestamp }}.cfg"
 
     # IOS-XR uses install add/activate/commit. Screen-scrape via iosxr_command
     # because install workflow is version-dependent; verify prompts per release.
