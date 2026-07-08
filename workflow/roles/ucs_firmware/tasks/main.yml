@@ -17,12 +17,23 @@
 
 - name: Determine UCS compliance (best-effort parse)
   ansible.builtin.set_fact:
+    ucs_query_failed: "{{ _ucs_running is failed }}"
     running_version: "{{ (_ucs_running.objects | default([]) | selectattr('deployment','defined') | selectattr('deployment','equalto','system') | map(attribute='version') | list | first) | default('unknown') }}"
     target_version: "{{ golden_versions.ucs.version }}"
 
 - name: Compute UCS compliance flag
   ansible.builtin.set_fact:
     compliant: "{{ running_version == target_version }}"
+
+- name: Refuse UCS remediation when version query failed
+  ansible.builtin.fail:
+    msg: >-
+      Refusing UCS firmware remediation for {{ inventory_hostname }} because
+      the running UCS Manager version could not be queried safely.
+  when:
+    - ucs_query_failed | bool
+    - apply_cleared | bool
+    - reboot_after_upgrade | bool
 
 - name: Report UCS status
   ansible.builtin.debug:
@@ -31,6 +42,7 @@
 - name: Stage UCS infra firmware (guarded)
   when:
     - not (compliant | bool)
+    - not (ucs_query_failed | bool)
     - apply_cleared | bool
     - reboot_after_upgrade | bool     # UCS activation is service-impacting
   block:

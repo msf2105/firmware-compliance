@@ -1,0 +1,37 @@
+---
+- name: UCS query failure must block remediation
+  hosts: ucs
+  gather_facts: false
+  vars:
+    dev_username: test-user
+    dev_password: test-password
+    apply_cleared: true
+    reboot_after_upgrade: true
+    golden_versions:
+      ucs:
+        version: "4.3(4a)"
+  tasks:
+    - name: Run UCS role with a failing query module
+      block:
+        - name: Include UCS firmware role
+          ansible.builtin.include_role:
+            name: ucs_firmware
+
+        - name: Fail if the role completed despite query failure
+          ansible.builtin.fail:
+            msg: "UCS role completed despite query failure"
+      rescue:
+        - name: Capture failure message
+          ansible.builtin.set_fact:
+            ucs_failure_msg: >-
+              {{ ansible_failed_result.msg
+                 | default(ansible_failed_result.message
+                 | default(ansible_failed_result | string)) }}
+
+    - name: Assert remediation failed closed before touching UCS managed objects
+      ansible.builtin.assert:
+        that:
+          - ucs_failure_msg is defined
+          - ucs_failure_msg is search('Refusing UCS firmware remediation')
+          - ucs_failure_msg is not search('UNSAFE UCS remediation')
+        fail_msg: "Unexpected UCS failure path: {{ ucs_failure_msg | default('no failure captured') }}"
