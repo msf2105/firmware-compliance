@@ -42,6 +42,7 @@
   when:
     - not (compliant | bool)
     - apply_cleared | bool
+    - reboot_after_upgrade | bool
   block:
     - name: Point controller firmware policy at golden version
       cisco.aci.aci_firmware_policy:
