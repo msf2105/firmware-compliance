@@ -25,9 +25,25 @@
   register: _aci_running
   no_log: true
 
+- name: Extract ACI controller firmware versions
+  ansible.builtin.set_fact:
+    _aci_controller_versions: >-
+      {{ _aci_running.imdata | default([])
+         | map(attribute='firmwareCtrlrRunning.attributes.version')
+         | select('defined')
+         | list }}
+
+- name: Require ACI controller firmware version data
+  ansible.builtin.assert:
+    that:
+      - _aci_controller_versions | length > 0
+    fail_msg: >-
+      APIC firmware query returned no controller versions for {{ inventory_hostname }};
+      refusing to decide compliance or update firmware policy from unknown state.
+
 - name: Determine ACI compliance
   ansible.builtin.set_fact:
-    running_version: "{{ (_aci_running.imdata | default([]) | map(attribute='firmwareCtrlrRunning.attributes.version') | list | first) | default('unknown') }}"
+    running_version: "{{ _aci_controller_versions | first }}"
     target_version: "{{ golden_versions.aci.apic_version }}"
 
 - name: Compute ACI compliance flag
