@@ -59,9 +59,37 @@
   gather_facts: false
   vars_files:
     - ../vars/golden_versions.yml
+  vars:
+    firmware_platforms:
+      - ios
+      - iosxr
+      - nxos
+      - asa
+      - aci
+      - dnac
+      - ise
+      - ucs
+      - panos
+      - f5
   # keep going even if one platform errors — we still want a full report
   any_errors_fatal: false
   tasks:
+    - name: Identify firmware platform membership
+      ansible.builtin.set_fact:
+        firmware_platform_groups: "{{ group_names | intersect(firmware_platforms) | list }}"
+
+    - name: Require exactly one firmware platform group
+      ansible.builtin.assert:
+        that:
+          - firmware_platform_groups | length == 1
+        fail_msg: >-
+          Host {{ inventory_hostname }} belongs to {{ firmware_platform_groups | length }}
+          firmware platform groups ({{ firmware_platform_groups | join(', ') | default('none', true) }}).
+          Each host must be in exactly one of {{ firmware_platforms | join(', ') }}
+          so only one firmware role can mutate it.
+        success_msg: >-
+          Host {{ inventory_hostname }} firmware platform={{ firmware_platform_groups[0] }}.
+
     - name: Resolve device credentials from Secret Server
       ansible.builtin.include_role:
         name: secret_server
@@ -73,9 +101,7 @@
     - name: Dispatch platform firmware role by group membership
       ansible.builtin.include_role:
         name: "{{ item }}_firmware"
-      # group_names holds every group this host belongs to; the intersection
-      # with our known platforms selects exactly one role per host.
-      loop: "{{ group_names | intersect(['ios','iosxr','nxos','asa','aci','dnac','ise','ucs','panos','f5']) }}"
+      loop: "{{ firmware_platform_groups }}"
 
     - name: Add per-device result work note to change (apply mode)
       when:
