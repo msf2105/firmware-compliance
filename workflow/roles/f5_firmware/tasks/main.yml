@@ -26,6 +26,15 @@
   ansible.builtin.debug:
     msg: "BIG-IP {{ inventory_hostname }} running={{ running_version }} target={{ target_version }} compliant={{ compliant }}"
 
+- name: Fail closed when F5 running version is unknown
+  ansible.builtin.fail:
+    msg: >-
+      Refusing to upgrade BIG-IP {{ inventory_hostname }} because the device
+      info response did not include system_info.product_version.
+  when:
+    - apply_cleared | bool
+    - (running_version | default('unknown') | string | trim | lower) in ['', 'unknown']
+
 - name: Upgrade F5 (guarded)
   when:
     - not (compliant | bool)
