@@ -31,7 +31,25 @@
     ansible_become: true
     ansible_become_method: enable
     ansible_become_password: "{{ dev_enable | default(dev_password) }}"
+    _ios_target_image_path: "{{ golden_versions.ios.image_disk }}{{ golden_versions.ios.image_file }}"
   block:
+    - name: Verify IOS golden image is present
+      cisco.ios.ios_command:
+        commands:
+          - "dir {{ _ios_target_image_path }}"
+      register: _ios_image_check
+      changed_when: false
+
+    - name: Fail when IOS golden image is missing
+      ansible.builtin.assert:
+        that:
+          - _ios_image_check.stdout is defined
+          - _ios_image_check.stdout | length > 0
+          - golden_versions.ios.image_file in _ios_image_check.stdout[0]
+          - _ios_image_check.stdout[0] is not search('(?i)(no such|error|not found|invalid)')
+        fail_msg: "Refusing to change boot system: target IOS image {{ _ios_target_image_path }} is not present on {{ inventory_hostname }}."
+        quiet: true
+
     - name: Backup running config before change
       cisco.ios.ios_config:
         backup: true
@@ -42,7 +60,7 @@
     - name: Set boot system to golden image
       cisco.ios.ios_config:
         lines:
-          - "boot system {{ golden_versions.ios.image_disk }}{{ golden_versions.ios.image_file }}"
+          - "boot system {{ _ios_target_image_path }}"
         save_when: modified
 
     - name: Reload to activate (only when reboot_after_upgrade)
