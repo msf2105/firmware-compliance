@@ -1,58 +1,104 @@
 ---
 # dnac_firmware — Cisco Catalyst Center (DNA Center) SWIM compliance.
-# Catalyst Center manages device images centrally (SWIM). This role queries the
-# golden image tag and reports network devices whose running image differs.
+# Catalyst Center manages device images centrally (SWIM). This role uses the
+# per-device SWIM image status; the image repository alone is not compliance.
 # Actual distribute/activate is service-impacting and gated.
 - name: Build Catalyst Center connection params
   ansible.builtin.set_fact:
     _catc:
-      dnac_host: "{{ ansible_host }}"
-      dnac_username: "{{ dev_username }}"
-      dnac_password: "{{ dev_password }}"
-      dnac_verify: false
-      dnac_debug: false
+      catalystcenter_host: "{{ ansible_host }}"
+      catalystcenter_username: "{{ dev_username }}"
+      catalystcenter_password: "{{ dev_password }}"
+      catalystcenter_verify: false
+      catalystcenter_debug: false
   no_log: true
 
 - name: Get list of imported software images
   cisco.catalystcenter.swim_image_details_info:
-    dnac_host: "{{ ansible_host }}"
-    dnac_username: "{{ dev_username }}"
-    dnac_password: "{{ dev_password }}"
-    dnac_verify: false
-    imageName: "{{ golden_versions.dnac.version }}"
+    catalystcenter_host: "{{ _catc.catalystcenter_host }}"
+    catalystcenter_username: "{{ _catc.catalystcenter_username }}"
+    catalystcenter_password: "{{ _catc.catalystcenter_password }}"
+    catalystcenter_verify: "{{ _catc.catalystcenter_verify }}"
+    catalystcenter_debug: "{{ _catc.catalystcenter_debug }}"
+    version: "{{ golden_versions.dnac.version }}"
   register: _catc_images
   ignore_errors: true
   no_log: true
 
-- name: Determine Catalyst Center golden-image presence
+- name: Get network device image compliance
+  cisco.catalystcenter.network_device_images_info:
+    catalystcenter_host: "{{ _catc.catalystcenter_host }}"
+    catalystcenter_username: "{{ _catc.catalystcenter_username }}"
+    catalystcenter_password: "{{ _catc.catalystcenter_password }}"
+    catalystcenter_verify: "{{ _catc.catalystcenter_verify }}"
+    catalystcenter_debug: "{{ _catc.catalystcenter_debug }}"
+    limit: 500
+  register: _catc_device_images
+  ignore_errors: true
+  no_log: true
+
+- name: Normalize Catalyst Center SWIM results
+  ansible.builtin.set_fact:
+    _catc_imported_images: "{{ _catc_images.catalystcenter_response.response | default([]) }}"
+    _catc_device_image_rows: "{{ _catc_device_images.catalystcenter_response.response | default([]) }}"
+
+- name: Identify Catalyst Center devices not on golden image
+  ansible.builtin.set_fact:
+    _catc_outdated_device_rows: "{{ _catc_device_image_rows | rejectattr('networkDeviceImageStatus', 'equalto', 'UP_TO_DATE') | list }}"
+
+- name: Count Catalyst Center devices on golden image
+  ansible.builtin.set_fact:
+    _catc_up_to_date_count: "{{ (_catc_device_image_rows | length) - (_catc_outdated_device_rows | length) }}"
+
+- name: Determine Catalyst Center device compliance
   ansible.builtin.set_fact:
     target_version: "{{ golden_versions.dnac.version }}"
-    running_version: "{{ (_catc_images.response | default([]) | length) | ternary('golden image imported', 'golden image MISSING') }}"
-    compliant: "{{ (_catc_images.response | default([]) | length) > 0 }}"
+    running_version: >-
+      {{ (_catc_device_image_rows | length > 0)
+         | ternary((_catc_up_to_date_count | string) ~ '/' ~ (_catc_device_image_rows | length | string) ~ ' devices UP_TO_DATE',
+                   'no network device image status returned') }}
+    compliant: "{{ (_catc_device_image_rows | length > 0) and ((_catc_outdated_device_rows | length) == 0) }}"
+    golden_image_imported: "{{ (_catc_imported_images | length) > 0 }}"
 
 - name: Report Catalyst Center status
   ansible.builtin.debug:
     msg: >-
       CatalystCenter {{ inventory_hostname }} golden={{ target_version }}
       status='{{ running_version }}' compliant={{ compliant }}
-      (per-device SWIM distribution reviewed via Catalyst Center compliance dashboard)
+      golden_image_imported={{ golden_image_imported }}
+      (per-device SWIM status from Catalyst Center networkDeviceImages)
 
-- name: Import golden image + tag golden (guarded)
+- name: Refuse Catalyst Center remediation when state query failed
+  ansible.builtin.fail:
+    msg: "Refusing Catalyst Center remediation because image repository or per-device SWIM status could not be queried."
   when:
-    - not (compliant | bool)
+    - apply_cleared | bool
+    - (_catc_images is failed) or (_catc_device_images is failed)
+
+- name: Import golden image when repository image is missing (guarded)
+  when:
+    - not (golden_image_imported | bool)
     - apply_cleared | bool
   block:
+    - name: Require Catalyst Center image URL before import
+      ansible.builtin.assert:
+        that:
+          - golden_versions.dnac.image_url is defined
+          - (golden_versions.dnac.image_url | length) > 0
+        fail_msg: "Refusing Catalyst Center import: golden_versions.dnac.image_url is required when the golden image is missing."
+        quiet: true
+
     - name: Import software image via URL
-      cisco.catalystcenter.swim_image_url_import:
-        dnac_host: "{{ ansible_host }}"
-        dnac_username: "{{ dev_username }}"
-        dnac_password: "{{ dev_password }}"
-        dnac_verify: false
+      cisco.catalystcenter.swim_import_via_url:
+        catalystcenter_host: "{{ _catc.catalystcenter_host }}"
+        catalystcenter_username: "{{ _catc.catalystcenter_username }}"
+        catalystcenter_password: "{{ _catc.catalystcenter_password }}"
+        catalystcenter_verify: "{{ _catc.catalystcenter_verify }}"
+        catalystcenter_debug: "{{ _catc.catalystcenter_debug }}"
         payload:
-          - sourceURL: "{{ golden_versions.dnac.image_url | default('') }}"
+          - sourceURL: "{{ golden_versions.dnac.image_url }}"
             thirdParty: false
       register: _catc_import
-      when: (golden_versions.dnac.image_url | default('')) | length > 0
       no_log: true
 
     - name: Record upgrade action
