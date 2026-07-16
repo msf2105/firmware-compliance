@@ -1,0 +1,56 @@
+---
+- name: DNAC query failures fail closed in apply mode
+  hosts: localhost
+  gather_facts: false
+  vars:
+    apply_cleared: true
+    golden_versions:
+      dnac:
+        version: "cat9k_iosxe.17.09.05"
+  tasks:
+    - name: Simulate failed Catalyst Center image query
+      ansible.builtin.set_fact:
+        _catc_images:
+          failed: true
+          msg: simulated API timeout
+
+    - name: Evaluate query state and capture fail-closed guard
+      block:
+        - name: Include DNAC query-state tasks
+          ansible.builtin.import_tasks: ../roles/dnac_firmware/tasks/image_query_state.yml
+      rescue:
+        - name: Record fail-closed result
+          ansible.builtin.set_fact:
+            _dnac_fail_closed: true
+
+    - name: Assert failed query cannot proceed as a missing image
+      ansible.builtin.assert:
+        that:
+          - _dnac_fail_closed | default(false) | bool
+          - _catc_image_query_failed | bool
+          - not (compliant | bool)
+          - running_version == 'golden image query failed'
+
+- name: DNAC missing image remains distinct from query failure
+  hosts: localhost
+  gather_facts: false
+  vars:
+    apply_cleared: true
+    golden_versions:
+      dnac:
+        version: "cat9k_iosxe.17.09.05"
+  tasks:
+    - name: Simulate successful Catalyst Center query with no matching image
+      ansible.builtin.set_fact:
+        _catc_images:
+          response: []
+
+    - name: Include DNAC query-state tasks
+      ansible.builtin.import_tasks: ../roles/dnac_firmware/tasks/image_query_state.yml
+
+    - name: Assert missing image is still eligible for guarded import
+      ansible.builtin.assert:
+        that:
+          - not (_catc_image_query_failed | bool)
+          - not (compliant | bool)
+          - running_version == 'golden image MISSING'
