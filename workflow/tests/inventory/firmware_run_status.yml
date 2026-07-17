@@ -1,0 +1,17 @@
+---
+all:
+  children:
+    ios:
+      hosts:
+        completed-ios:
+          ansible_connection: local
+        incomplete-ios:
+          ansible_connection: local
+    nxos:
+      hosts:
+        completed-nxos:
+          ansible_connection: local
+    monitoring:
+      hosts:
+        out-of-scope-host:
+          ansible_connection: local

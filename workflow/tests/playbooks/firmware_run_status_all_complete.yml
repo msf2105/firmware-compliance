@@ -1,0 +1,26 @@
+---
+- name: Seed all firmware hosts as completed
+  hosts:
+    - completed-ios
+    - incomplete-ios
+    - completed-nxos
+  gather_facts: false
+  tasks:
+    - name: Mark every platform host complete
+      ansible.builtin.set_fact:
+        firmware_workflow_completed: true
+
+- name: Verify a fully completed platform run closes successfully
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Aggregate firmware run status
+      ansible.builtin.include_role:
+        name: firmware_run_status
+
+    - name: Assert no incomplete platform hosts are detected
+      ansible.builtin.assert:
+        that:
+          - firmware_target_hosts | sort == ['completed-ios', 'completed-nxos', 'incomplete-ios'] | sort
+          - firmware_incomplete_hosts | length == 0
+          - not (firmware_run_has_failures | bool)
