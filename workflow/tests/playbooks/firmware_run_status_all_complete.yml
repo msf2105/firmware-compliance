@@ -24,3 +24,4 @@
           - firmware_target_hosts | sort == ['completed-ios', 'completed-nxos', 'incomplete-ios'] | sort
           - firmware_incomplete_hosts | length == 0
           - not (firmware_run_has_failures | bool)
+          - firmware_snow_close_code == 'successful'

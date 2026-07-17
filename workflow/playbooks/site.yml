@@ -148,7 +148,7 @@
         name: servicenow
       vars:
         snow_action: close
-        snow_close_code: "{{ 'unsuccessful' if firmware_run_has_failures | default(false) | bool else 'successful' }}"
+        snow_close_code: "{{ firmware_snow_close_code | default('successful') }}"
         snow_close_notes: >-
           Firmware compliance run complete. See attached Ansible report artifact
           under reports/. Mode: {{ 'APPLY' if apply_updates | bool else 'DRY-RUN' }}.

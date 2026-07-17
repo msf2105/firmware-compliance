@@ -34,3 +34,4 @@
 - name: Record aggregate firmware run status
   ansible.builtin.set_fact:
     firmware_run_has_failures: "{{ (firmware_incomplete_hosts | length) > 0 }}"
+    firmware_snow_close_code: "{{ 'unsuccessful' if (firmware_incomplete_hosts | length) > 0 else 'successful' }}"
