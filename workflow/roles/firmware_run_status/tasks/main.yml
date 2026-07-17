@@ -1,0 +1,37 @@
+---
+# Aggregate the per-host completion marker set by the platform workflow.
+# Missing completion is treated as failure so unreachable hosts cannot close a
+# ServiceNow change as successful.
+- name: Initialize firmware target host list
+  ansible.builtin.set_fact:
+    firmware_target_hosts: []
+
+- name: Collect firmware target hosts from platform groups
+  ansible.builtin.set_fact:
+    firmware_target_hosts: "{{ (firmware_target_hosts + (groups[item] | default([]))) | unique | list }}"
+  loop:
+    - ios
+    - iosxr
+    - nxos
+    - asa
+    - aci
+    - dnac
+    - ise
+    - ucs
+    - panos
+    - f5
+
+- name: Initialize incomplete firmware host list
+  ansible.builtin.set_fact:
+    firmware_incomplete_hosts: []
+
+- name: Collect hosts without a completed firmware workflow
+  ansible.builtin.set_fact:
+    firmware_incomplete_hosts: "{{ firmware_incomplete_hosts + [item] }}"
+  loop: "{{ firmware_target_hosts }}"
+  when: not (hostvars[item].firmware_workflow_completed | default(false) | bool)
+
+- name: Record aggregate firmware run status
+  ansible.builtin.set_fact:
+    firmware_run_has_failures: "{{ (firmware_incomplete_hosts | length) > 0 }}"
+    firmware_snow_close_code: "{{ 'unsuccessful' if (firmware_incomplete_hosts | length) > 0 else 'successful' }}"

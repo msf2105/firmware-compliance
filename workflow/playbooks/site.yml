@@ -62,35 +62,62 @@
   # keep going even if one platform errors — we still want a full report
   any_errors_fatal: false
   tasks:
-    - name: Resolve device credentials from Secret Server
-      ansible.builtin.include_role:
-        name: secret_server
+    - name: Execute per-device firmware workflow
+      block:
+        - name: Resolve device credentials from Secret Server
+          ansible.builtin.include_role:
+            name: secret_server
 
-    - name: Run preflight safety gate
-      ansible.builtin.include_role:
-        name: preflight
+        - name: Run preflight safety gate
+          ansible.builtin.include_role:
+            name: preflight
 
-    - name: Dispatch platform firmware role by group membership
-      ansible.builtin.include_role:
-        name: "{{ item }}_firmware"
-      # group_names holds every group this host belongs to; the intersection
-      # with our known platforms selects exactly one role per host.
-      loop: "{{ group_names | intersect(['ios','iosxr','nxos','asa','aci','dnac','ise','ucs','panos','f5']) }}"
+        - name: Dispatch platform firmware role by group membership
+          ansible.builtin.include_role:
+            name: "{{ item }}_firmware"
+          # group_names holds every group this host belongs to; the intersection
+          # with our known platforms selects exactly one role per host.
+          loop: "{{ group_names | intersect(['ios','iosxr','nxos','asa','aci','dnac','ise','ucs','panos','f5']) }}"
 
-    - name: Add per-device result work note to change (apply mode)
-      when:
-        - snow_change_sys_id is defined
-        - snow_change_number is defined
-      ansible.builtin.include_role:
-        name: servicenow
-      vars:
-        snow_action: note
-        snow_note: >-
-          {{ inventory_hostname }} [{{ platform_label | default('?') }}]
-          running={{ running_version | default('n/a') }}
-          target={{ target_version | default('n/a') }}
-          compliant={{ compliant | default('n/a') }}
-          {{ ('action=' + upgrade_action) if (upgrade_action is defined) else '' }}
+        - name: Mark firmware workflow complete
+          ansible.builtin.set_fact:
+            firmware_workflow_completed: true
+            firmware_run_failed: false
+
+        - name: Add per-device result work note to change (apply mode)
+          when:
+            - snow_change_sys_id is defined
+            - snow_change_number is defined
+          ansible.builtin.include_role:
+            name: servicenow
+          vars:
+            snow_action: note
+            snow_note: >-
+              {{ inventory_hostname }} [{{ platform_label | default('?') }}]
+              running={{ running_version | default('n/a') }}
+              target={{ target_version | default('n/a') }}
+              compliant={{ compliant | default('n/a') }}
+              {{ ('action=' + upgrade_action) if (upgrade_action is defined) else '' }}
+      rescue:
+        - name: Mark firmware workflow failed
+          ansible.builtin.set_fact:
+            firmware_workflow_completed: false
+            firmware_run_failed: true
+            compliant: false
+            upgrade_action: "firmware workflow failed before completion"
+
+        - name: Add per-device failure work note to change (apply mode)
+          when:
+            - snow_change_sys_id is defined
+            - snow_change_number is defined
+          ansible.builtin.include_role:
+            name: servicenow
+          vars:
+            snow_action: note
+            snow_note: >-
+              {{ inventory_hostname }} [{{ platform_label | default('?') }}]
+              FAILED during {{ ansible_failed_task.name | default('firmware workflow') }}.
+              Firmware workflow did not complete.
 
 # ---------- Play 3: aggregate report + close the change ----------
 - name: Build compliance report and close change
@@ -109,6 +136,10 @@
       ansible.builtin.include_role:
         name: compliance_report
 
+    - name: Determine firmware run completion status
+      ansible.builtin.include_role:
+        name: firmware_run_status
+
     - name: Close ServiceNow change (apply mode)
       when:
         - snow_change_sys_id is defined
@@ -117,7 +148,8 @@
         name: servicenow
       vars:
         snow_action: close
-        snow_close_code: successful
+        snow_close_code: "{{ firmware_snow_close_code | default('successful') }}"
         snow_close_notes: >-
           Firmware compliance run complete. See attached Ansible report artifact
           under reports/. Mode: {{ 'APPLY' if apply_updates | bool else 'DRY-RUN' }}.
+          {{ ('Failed or incomplete hosts: ' + (firmware_incomplete_hosts | join(', ')) + '.') if firmware_run_has_failures | default(false) | bool else '' }}
