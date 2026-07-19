@@ -31,6 +31,15 @@
     - not (compliant | bool)
     - apply_cleared | bool
   block:
+    - name: Assert F5 target software volume is configured
+      ansible.builtin.assert:
+        that:
+          - golden_versions.f5.volume is defined
+          - (golden_versions.f5.volume | string | length) > 0
+        fail_msg: >-
+          F5 remediation requires golden_versions.f5.volume, for example HD1.2,
+          so bigip_software_install has an operator-approved boot volume.
+
     - name: Save/backup current config (UCS archive)
       f5networks.f5_modules.bigip_ucs_fetch:
         provider: "{{ _f5_provider }}"
@@ -46,9 +55,10 @@
       f5networks.f5_modules.bigip_software_install:
         provider: "{{ _f5_provider }}"
         image: "{{ golden_versions.f5.image_file }}"
+        volume: "{{ golden_versions.f5.volume }}"
         state: "{{ 'activated' if reboot_after_upgrade | bool else 'installed' }}"
       register: _f5_install
 
     - name: Record upgrade action
       ansible.builtin.set_fact:
-        upgrade_action: "software_install -> {{ target_version }} state={{ 'activated' if reboot_after_upgrade | bool else 'installed' }}"
+        upgrade_action: "software_install -> {{ target_version }} volume={{ golden_versions.f5.volume }} state={{ 'activated' if reboot_after_upgrade | bool else 'installed' }}"

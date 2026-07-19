@@ -51,8 +51,9 @@ apply mode on a given platform.
 
 ## F5 BIG-IP (`f5networks.f5_modules`)
 - Image install to an inactive boot location (volume), then boot into it. The
-  role targets the golden ISO; volume management and the reboot-into-new-volume
-  step should be validated for your HA/DSC setup.
+  role targets the golden ISO and the explicit `golden_versions.f5.volume`;
+  volume selection and the reboot-into-new-volume step should be validated for
+  your HA/DSC setup.
 
 ---
 

@@ -85,6 +85,7 @@ verify reachability after a reload before declaring success.
 ## Pre-flight checklist before an apply run
 
 - [ ] Golden versions in `vars/golden_versions.yml` match the approved matrix
+- [ ] F5 target volume (`golden_versions.f5.volume`) points at the approved inactive BIG-IP volume
 - [ ] `inventory/hosts.yml` has real hosts + correct `secret_id` per device
 - [ ] `TSS_*` and `SNOW_*` env vars exported and valid
 - [ ] Inside (or explicitly overriding) the maintenance window
