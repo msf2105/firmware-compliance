@@ -44,6 +44,8 @@ golden_versions:
   f5:
     version: "17.1.1.3"
     image_file: "BIGIP-17.1.1.3-0.0.5.iso"
+    # Operator-approved target software volume for BIG-IP install, e.g. HD1.2.
+    volume: "HD1.2"
 
 # Global switches (overridable at run time with -e)
 apply_updates: false          # DRY-RUN by default. true = actually push firmware.
