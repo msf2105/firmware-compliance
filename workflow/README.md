@@ -94,8 +94,8 @@ with `no_log`. Platform roles consume those facts for the device connection.
 - **ISE** is report-only (see safety model).
 - **ACI / DNAC / UCS / PANOS / F5** use HTTP APIs (`ansible_connection: local`);
   the SSH platforms (IOS/XR/NXOS/ASA) use `network_cli`.
-- The default maintenance window is a simple same-day check. For overnight
-  windows spanning midnight, adjust `roles/preflight/defaults/main.yml` or run
-  in two invocations (documented inline).
+- The default maintenance window supports overnight spans: a day listed in
+  `roles/preflight/defaults/main.yml` starts at `maint_start_hour` and carries
+  through `maint_end_hour` on the following day.
 - This ships with **sample hosts** and **example golden versions** — both must
   be replaced with your real environment before an apply run.

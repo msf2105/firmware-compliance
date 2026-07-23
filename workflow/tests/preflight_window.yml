@@ -1,0 +1,76 @@
+---
+- name: Validate preflight overnight maintenance window
+  hosts: localhost
+  gather_facts: false
+  vars:
+    apply_updates: true
+    require_change_ticket: false
+    maint_days: [6, 7]
+    maint_start_hour: 22
+    maint_end_hour: 6
+
+  tasks:
+    - name: Saturday 02:00 is before the Saturday night window
+      ansible.builtin.include_role:
+        name: preflight
+      vars:
+        ansible_date_time:
+          epoch: "1784944800"  # 2026-07-25 02:00 UTC, Saturday
+
+    - name: Assert Saturday 02:00 is blocked
+      ansible.builtin.assert:
+        that:
+          - not (in_window | bool)
+          - not (apply_cleared | bool)
+
+    - name: Saturday 22:00 starts the Saturday night window
+      ansible.builtin.include_role:
+        name: preflight
+      vars:
+        ansible_date_time:
+          epoch: "1785016800"  # 2026-07-25 22:00 UTC, Saturday
+
+    - name: Assert Saturday 22:00 is allowed
+      ansible.builtin.assert:
+        that:
+          - in_window | bool
+          - apply_cleared | bool
+
+    - name: Sunday 05:00 carries over from Saturday night
+      ansible.builtin.include_role:
+        name: preflight
+      vars:
+        ansible_date_time:
+          epoch: "1785042000"  # 2026-07-26 05:00 UTC, Sunday
+
+    - name: Assert Sunday 05:00 is allowed
+      ansible.builtin.assert:
+        that:
+          - in_window | bool
+          - apply_cleared | bool
+
+    - name: Monday 05:00 carries over from Sunday night
+      ansible.builtin.include_role:
+        name: preflight
+      vars:
+        ansible_date_time:
+          epoch: "1785128400"  # 2026-07-27 05:00 UTC, Monday
+
+    - name: Assert Monday 05:00 is allowed
+      ansible.builtin.assert:
+        that:
+          - in_window | bool
+          - apply_cleared | bool
+
+    - name: Monday 06:00 is after the Sunday night window
+      ansible.builtin.include_role:
+        name: preflight
+      vars:
+        ansible_date_time:
+          epoch: "1785132000"  # 2026-07-27 06:00 UTC, Monday
+
+    - name: Assert Monday 06:00 is blocked
+      ansible.builtin.assert:
+        that:
+          - not (in_window | bool)
+          - not (apply_cleared | bool)

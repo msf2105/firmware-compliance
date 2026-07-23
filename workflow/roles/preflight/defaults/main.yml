@@ -2,7 +2,5 @@
 # preflight defaults — maintenance window definition. Overridable with -e.
 maint_days: [6, 7]        # Saturday, Sunday (ISO: 1=Mon..7=Sun)
 maint_start_hour: 22      # 22:00
-maint_end_hour: 6         # ...but see note: for overnight windows spanning
-                          # midnight, run the play in two invocations or set a
-                          # single-day window. Default here is a simple in-day
-                          # check; adjust to your real change calendar.
+maint_end_hour: 6         # ...through 06:00 on the following day for overnight
+                          # windows. Adjust to your real change calendar.
