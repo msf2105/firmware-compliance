@@ -44,11 +44,16 @@
         snow_action: open
 
     - name: Publish change identifiers to all device hosts
-      when: snow_change_number is defined
+      when:
+        - snow_change_sys_id is defined
+        - snow_change_number is defined
+        - _snow_change_opened_sys_id is defined
+        - snow_change_sys_id == _snow_change_opened_sys_id
       ansible.builtin.add_host:
         name: "{{ item }}"
         snow_change_sys_id: "{{ snow_change_sys_id }}"
         snow_change_number: "{{ snow_change_number }}"
+        _snow_change_opened_sys_id: "{{ _snow_change_opened_sys_id }}"
       loop: "{{ groups['all'] | difference(['ungrouped', 'localhost']) }}"
       changed_when: false
 
@@ -79,8 +84,11 @@
 
     - name: Add per-device result work note to change (apply mode)
       when:
+        - (apply_updates | default(false)) | bool
         - snow_change_sys_id is defined
         - snow_change_number is defined
+        - _snow_change_opened_sys_id is defined
+        - snow_change_sys_id == _snow_change_opened_sys_id
       ansible.builtin.include_role:
         name: servicenow
       vars:
@@ -111,8 +119,11 @@
 
     - name: Close ServiceNow change (apply mode)
       when:
+        - (apply_updates | default(false)) | bool
         - snow_change_sys_id is defined
         - snow_change_number is defined
+        - _snow_change_opened_sys_id is defined
+        - snow_change_sys_id == _snow_change_opened_sys_id
       ansible.builtin.include_role:
         name: servicenow
       vars:

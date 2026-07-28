@@ -32,11 +32,17 @@
       ansible.builtin.set_fact:
         snow_change_sys_id: "{{ _snow_cr.record.sys_id }}"
         snow_change_number: "{{ _snow_cr.record.number }}"
+        _snow_change_opened_sys_id: "{{ _snow_cr.record.sys_id }}"
       delegate_to: localhost
       run_once: true
 
 - name: Add work note to change
-  when: snow_action == 'note'
+  when:
+    - snow_action == 'note'
+    - (apply_updates | default(false)) | bool
+    - snow_change_sys_id is defined
+    - _snow_change_opened_sys_id is defined
+    - snow_change_sys_id == _snow_change_opened_sys_id
   servicenow.itsm.change_request:
     instance:
       host: "{{ lookup('env', 'SNOW_INSTANCE') }}"
@@ -48,7 +54,12 @@
   delegate_to: localhost
 
 - name: Close change request
-  when: snow_action == 'close'
+  when:
+    - snow_action == 'close'
+    - (apply_updates | default(false)) | bool
+    - snow_change_sys_id is defined
+    - _snow_change_opened_sys_id is defined
+    - snow_change_sys_id == _snow_change_opened_sys_id
   servicenow.itsm.change_request:
     instance:
       host: "{{ lookup('env', 'SNOW_INSTANCE') }}"
