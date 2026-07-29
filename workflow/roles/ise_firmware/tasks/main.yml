@@ -15,9 +15,8 @@
   ignore_errors: true
   no_log: true
 
-# The version endpoint varies by ISE release; use the versioninfo op if present.
 - name: Query ISE version info (best effort)
-  cisco.ise.backup_last_status_info:
+  cisco.ise.mnt_version_info:
     ise_hostname: "{{ ansible_host }}"
     ise_username: "{{ dev_username }}"
     ise_password: "{{ dev_password }}"
@@ -26,11 +25,27 @@
   ignore_errors: true
   no_log: true
 
+- name: Query ISE installed patch info (best effort)
+  cisco.ise.patch_info:
+    ise_hostname: "{{ ansible_host }}"
+    ise_username: "{{ dev_username }}"
+    ise_password: "{{ dev_password }}"
+    ise_verify: false
+  register: _ise_patch
+  ignore_errors: true
+  no_log: true
+
+- name: Determine ISE observed version and patch
+  ansible.builtin.set_fact:
+    _ise_running_version: "{{ _ise_ver.ise_response.version | default('unknown') }}"
+    _ise_patch_numbers: "{{ _ise_patch.ise_response.patchVersion | default([]) | map(attribute='patchNumber') | map('int') | list }}"
+
 - name: Determine ISE compliance target (audit-only)
   ansible.builtin.set_fact:
     target_version: "{{ golden_versions.ise.version }} patch {{ golden_versions.ise.patch }}"
-    running_version: "{{ _ise_ver.response.version | default('query via ISE admin / GUI — see note') }}"
-    compliant: "{{ (_ise_ver.response.version | default('')) == golden_versions.ise.version }}"
+    running_ise_patch: "{{ (_ise_patch_numbers | max | string) if (_ise_patch_numbers | length > 0) else 'unknown' }}"
+    running_version: "{{ _ise_running_version }} patch {{ running_ise_patch }}"
+    compliant: "{{ _ise_running_version == golden_versions.ise.version and running_ise_patch == (golden_versions.ise.patch | string) }}"
 
 - name: Report ISE status
   ansible.builtin.debug:
