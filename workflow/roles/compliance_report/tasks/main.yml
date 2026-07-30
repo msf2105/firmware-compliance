@@ -1,18 +1,6 @@
 ---
-# compliance_report — aggregate per-host results into a report artifact.
-# Runs once at the end (delegated to localhost) using hostvars from every host.
-- name: Build compliance record set
-  ansible.builtin.set_fact:
-    _report: >-
-      {{ groups['all']
-         | difference(['ungrouped'])
-         | map('extract', hostvars)
-         | selectattr('running_version','defined')
-         | map('combine', {'_placeholder': none})
-         | list }}
-  run_once: true
-  delegate_to: localhost
-
+# compliance_report — aggregate sanitized per-host results into a report artifact.
+# Runs once at the end (delegated to localhost) using only explicit report fields.
 - name: Assemble rows
   ansible.builtin.set_fact:
     _rows: >-
