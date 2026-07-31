@@ -14,11 +14,14 @@
     gather_subset: [system]
   register: _pan_facts
 
+- name: Normalize PAN-OS running version
+  ansible.builtin.set_fact:
+    running_version: "{{ (_pan_facts.ansible_facts.ansible_net_version | default(ansible_net_version | default('unknown'), true)) | string | trim }}"
+
 - name: Determine PAN-OS compliance
   ansible.builtin.set_fact:
-    running_version: "{{ _pan_facts.ansible_facts.ansible_net_version | default(ansible_net_version) }}"
     target_version: "{{ golden_versions.panos.version }}"
-    compliant: "{{ (_pan_facts.ansible_facts.ansible_net_version | default(ansible_net_version)) == golden_versions.panos.version }}"
+    compliant: "{{ running_version != 'unknown' and running_version == golden_versions.panos.version }}"
 
 - name: Report PAN-OS status
   ansible.builtin.debug:
@@ -28,6 +31,7 @@
   when:
     - not (compliant | bool)
     - apply_cleared | bool
+    - running_version != 'unknown'
   block:
     - name: Export/backup current config
       paloaltonetworks.panos.panos_export:
