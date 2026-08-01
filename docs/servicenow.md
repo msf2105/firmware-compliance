@@ -17,6 +17,7 @@ and approval trail. In audit/dry-run mode, no ServiceNow interaction happens.
 - Environment variables:
   - `SNOW_INSTANCE` — the instance name (e.g. `dev12345`, not the full URL)
   - `SNOW_USERNAME` / `SNOW_PASSWORD` — a service account with change_management
+  - `SNOW_ASSIGNMENT_GROUP` — assignment group used for change state transitions
 
 ## Behavior by mode
 
@@ -30,8 +31,9 @@ and approval trail. In audit/dry-run mode, no ServiceNow interaction happens.
 
 ## Customization
 
-- Change **type / state / assignment group**: edit the `change_request` task in
-  `roles/servicenow/tasks/main.yml` (Play 1 open block).
+- Change **type / state / assignment group**: set `snow_assignment_group` or
+  export `SNOW_ASSIGNMENT_GROUP`. The `servicenow.itsm.change_request` module
+  requires this when opening in `assess` and closing the change.
 - **Close code**: pass `snow_close_code` (default `successful`).
 - To require an **approved** change before applying (not just an open one), add
   an assertion in `preflight` that queries the change state via
