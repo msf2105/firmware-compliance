@@ -55,6 +55,7 @@ Export the secret-store and ITSM credentials (never stored in the repo):
 ```bash
 export TSS_USERNAME=... TSS_PASSWORD=...            # Delinea Secret Server
 export SNOW_INSTANCE=dev12345 SNOW_USERNAME=... SNOW_PASSWORD=...   # ServiceNow
+export SNOW_ASSIGNMENT_GROUP='Network Operations'   # ServiceNow change owner
 ```
 
 Then edit `vars/golden_versions.yml` (your approved software matrix) and

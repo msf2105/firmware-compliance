@@ -21,6 +21,7 @@ export TSS_PASSWORD='<secret-server-password>'   # reference via env var, don't 
 export SNOW_INSTANCE='dev12345'
 export SNOW_USERNAME='svc-ansible'
 export SNOW_PASSWORD='<servicenow-password>'
+export SNOW_ASSIGNMENT_GROUP='Network Operations'
 ```
 
 ## 1. Audit everything (safe, default)
@@ -87,5 +88,6 @@ verify reachability after a reload before declaring success.
 - [ ] Golden versions in `vars/golden_versions.yml` match the approved matrix
 - [ ] `inventory/hosts.yml` has real hosts + correct `secret_id` per device
 - [ ] `TSS_*` and `SNOW_*` env vars exported and valid
+- [ ] `SNOW_ASSIGNMENT_GROUP` matches a valid ServiceNow assignment group
 - [ ] Inside (or explicitly overriding) the maintenance window
 - [ ] Ran an audit first and reviewed the drift report

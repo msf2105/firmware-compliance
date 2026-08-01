@@ -1,0 +1,4 @@
+---
+# ServiceNow requires an assignment group when moving change requests through
+# active workflow states such as assess and closed.
+snow_assignment_group: "{{ lookup('ansible.builtin.env', 'SNOW_ASSIGNMENT_GROUP') }}"

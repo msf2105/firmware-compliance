@@ -9,6 +9,18 @@
 # SNOW auth via env: SNOW_INSTANCE, SNOW_USERNAME, SNOW_PASSWORD.
 # =====================================================================
 
+- name: Assert ServiceNow assignment group is configured
+  when: snow_action in ['open', 'close']
+  ansible.builtin.assert:
+    that:
+      - snow_assignment_group is defined
+      - snow_assignment_group | string | length > 0
+    fail_msg: >-
+      ServiceNow change state transitions require an assignment group. Set
+      snow_assignment_group or export SNOW_ASSIGNMENT_GROUP before apply mode.
+  delegate_to: localhost
+  run_once: true
+
 - name: Open change request
   when: snow_action == 'open'
   block:
@@ -20,6 +32,7 @@
           password: "{{ lookup('env', 'SNOW_PASSWORD') }}"
         type: standard
         state: assess
+        assignment_group: "{{ snow_assignment_group }}"
         short_description: "Automated firmware compliance run {{ ansible_date_time.iso8601 | default(lookup('pipe','date -Iseconds')) }}"
         description: >-
           Multi-platform firmware compliance / remediation initiated by Ansible.
@@ -56,6 +69,7 @@
       password: "{{ lookup('env', 'SNOW_PASSWORD') }}"
     sys_id: "{{ snow_change_sys_id }}"
     state: closed
+    assignment_group: "{{ snow_assignment_group }}"
     close_code: "{{ snow_close_code | default('successful') }}"
     close_notes: "{{ snow_close_notes | default('Firmware compliance run complete.') }}"
   delegate_to: localhost
