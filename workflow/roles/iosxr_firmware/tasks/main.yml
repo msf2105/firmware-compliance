@@ -33,20 +33,44 @@
           dir_path: "{{ playbook_dir }}/../backups/{{ inventory_hostname }}"
           filename: "pre-upgrade-{{ ansible_date_time.iso8601_basic_short | default('run') }}.cfg"
 
-    # IOS-XR uses install add/activate/commit. Screen-scrape via iosxr_command
-    # because install workflow is version-dependent; verify prompts per release.
-    - name: install add source
+    - name: Validate IOS-XR ISO replacement has reboot approval
+      ansible.builtin.assert:
+        that:
+          - reboot_after_upgrade | bool
+        fail_msg: >-
+          IOS-XR ISO upgrades use install replace, which activates the image and
+          reloads the router. Set reboot_after_upgrade=true during the approved
+          maintenance window, or use a non-ISO package workflow for staging only.
+      when: (golden_versions.iosxr.image_file | lower | regex_search('\.iso$')) is not none
+
+    # IOS-XR package installs can be staged with install add. Full ISO/GISO
+    # images use install replace instead; install add source is for packages.
+    - name: install add package source
       cisco.iosxr.iosxr_command:
         commands:
-          - "install add source /harddisk: {{ golden_versions.iosxr.image_file }}"
+          - "install add source /harddisk:/ {{ golden_versions.iosxr.image_file }}"
       register: _xr_add
+      when: (golden_versions.iosxr.image_file | lower | regex_search('\.iso$')) is none
+
+    - name: install replace golden ISO
+      cisco.iosxr.iosxr_command:
+        commands:
+          - command: "install replace /harddisk:/{{ golden_versions.iosxr.image_file }} noprompt"
+      when:
+        - reboot_after_upgrade | bool
+        - (golden_versions.iosxr.image_file | lower | regex_search('\.iso$')) is not none
 
     - name: install activate golden version
       cisco.iosxr.iosxr_command:
         commands:
           - command: "install activate {{ golden_versions.iosxr.version }} noprompt"
-      when: reboot_after_upgrade | bool
+      when:
+        - reboot_after_upgrade | bool
+        - (golden_versions.iosxr.image_file | lower | regex_search('\.iso$')) is none
 
     - name: Record upgrade action
       ansible.builtin.set_fact:
-        upgrade_action: "install add {{ target_version }}{{ ' + activate' if reboot_after_upgrade | bool else ' (activate deferred)' }}"
+        upgrade_action: >-
+          {{ 'install replace ' + target_version
+             if (golden_versions.iosxr.image_file | lower | regex_search('\.iso$')) is not none
+             else 'install add ' + target_version + (' + activate' if reboot_after_upgrade | bool else ' (activate deferred)') }}
