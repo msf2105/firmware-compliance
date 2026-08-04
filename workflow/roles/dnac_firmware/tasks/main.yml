@@ -42,6 +42,15 @@
     - not (compliant | bool)
     - apply_cleared | bool
   block:
+    - name: Require import URL before DNAC remediation
+      ansible.builtin.assert:
+        that:
+          - (golden_versions.dnac.image_url | default('') | string | trim | length) > 0
+        fail_msg: >-
+          Catalyst Center golden image {{ target_version }} is missing, but
+          golden_versions.dnac.image_url is not configured; refusing to record
+          remediation without an import source.
+
     - name: Import software image via URL
       cisco.catalystcenter.swim_image_url_import:
         dnac_host: "{{ ansible_host }}"
@@ -49,10 +58,9 @@
         dnac_password: "{{ dev_password }}"
         dnac_verify: false
         payload:
-          - sourceURL: "{{ golden_versions.dnac.image_url | default('') }}"
+          - sourceURL: "{{ golden_versions.dnac.image_url | trim }}"
             thirdParty: false
       register: _catc_import
-      when: (golden_versions.dnac.image_url | default('')) | length > 0
       no_log: true
 
     - name: Record upgrade action
