@@ -42,13 +42,17 @@
         provider: "{{ _f5_provider }}"
         image: "{{ playbook_dir }}/../images/{{ golden_versions.f5.image_file }}"
 
-    - name: Install image to inactive volume
+    - name: Install image and activate target volume (guarded)
       f5networks.f5_modules.bigip_software_install:
         provider: "{{ _f5_provider }}"
         image: "{{ golden_versions.f5.image_file }}"
-        state: "{{ 'activated' if reboot_after_upgrade | bool else 'installed' }}"
+        state: activated
       register: _f5_install
+      when: reboot_after_upgrade | bool
 
     - name: Record upgrade action
       ansible.builtin.set_fact:
-        upgrade_action: "software_install -> {{ target_version }} state={{ 'activated' if reboot_after_upgrade | bool else 'installed' }}"
+        upgrade_action: >-
+          {{ 'software_install -> ' + target_version + ' state=activated'
+             if reboot_after_upgrade | bool
+             else 'image uploaded for ' + target_version + ' (install/activation deferred: reboot_after_upgrade=false)' }}
