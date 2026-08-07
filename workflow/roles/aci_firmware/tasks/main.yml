@@ -26,13 +26,7 @@
   no_log: true
 
 - name: Determine ACI compliance
-  ansible.builtin.set_fact:
-    running_version: "{{ (_aci_running.imdata | default([]) | map(attribute='firmwareCtrlrRunning.attributes.version') | list | first) | default('unknown') }}"
-    target_version: "{{ golden_versions.aci.apic_version }}"
-
-- name: Compute ACI compliance flag
-  ansible.builtin.set_fact:
-    compliant: "{{ running_version == target_version }}"
+  ansible.builtin.include_tasks: compliance.yml
 
 - name: Report ACI status
   ansible.builtin.debug:

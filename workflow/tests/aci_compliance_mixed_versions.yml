@@ -1,0 +1,74 @@
+---
+- name: ACI compliance handles all APIC controller versions
+  hosts: localhost
+  gather_facts: false
+  vars:
+    golden_versions:
+      aci:
+        apic_version: "6.0(5h)"
+  tasks:
+    - name: Mock mixed APIC cluster with golden controller first
+      ansible.builtin.set_fact:
+        _aci_running:
+          imdata:
+            - firmwareCtrlrRunning:
+                attributes:
+                  version: "6.0(5h)"
+            - firmwareCtrlrRunning:
+                attributes:
+                  version: "6.0(4f)"
+            - firmwareCtrlrRunning:
+                attributes:
+                  version: "6.0(5h)"
+
+    - name: Evaluate ACI compliance for mixed cluster
+      ansible.builtin.include_tasks: ../roles/aci_firmware/tasks/compliance.yml
+
+    - name: Assert mixed controller versions are not compliant
+      ansible.builtin.assert:
+        that:
+          - not (compliant | bool)
+          - running_version == "6.0(5h), 6.0(4f), 6.0(5h)"
+
+    - name: Mock mixed APIC cluster with drifted controller first
+      ansible.builtin.set_fact:
+        _aci_running:
+          imdata:
+            - firmwareCtrlrRunning:
+                attributes:
+                  version: "6.0(4f)"
+            - firmwareCtrlrRunning:
+                attributes:
+                  version: "6.0(5h)"
+            - firmwareCtrlrRunning:
+                attributes:
+                  version: "6.0(5h)"
+
+    - name: Re-evaluate ACI compliance for reordered mixed cluster
+      ansible.builtin.include_tasks: ../roles/aci_firmware/tasks/compliance.yml
+
+    - name: Assert reordered mixed controller versions are not compliant
+      ansible.builtin.assert:
+        that:
+          - not (compliant | bool)
+          - running_version == "6.0(4f), 6.0(5h), 6.0(5h)"
+
+    - name: Mock fully compliant APIC cluster
+      ansible.builtin.set_fact:
+        _aci_running:
+          imdata:
+            - firmwareCtrlrRunning:
+                attributes:
+                  version: "6.0(5h)"
+            - firmwareCtrlrRunning:
+                attributes:
+                  version: "6.0(5h)"
+
+    - name: Evaluate ACI compliance for compliant cluster
+      ansible.builtin.include_tasks: ../roles/aci_firmware/tasks/compliance.yml
+
+    - name: Assert all matching controller versions are compliant
+      ansible.builtin.assert:
+        that:
+          - compliant | bool
+          - running_version == "6.0(5h), 6.0(5h)"
