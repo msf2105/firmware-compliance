@@ -10,9 +10,14 @@
 
 - name: Determine NX-OS compliance
   ansible.builtin.set_fact:
-    running_version: "{{ ansible_net_version | default(_nx_facts.ansible_facts.ansible_net_version) }}"
+    _nxos_observed_version: "{{ ansible_net_version | default(_nx_facts.ansible_facts.ansible_net_version | default('', true), true) | string | trim }}"
+
+- name: Set NX-OS compliance facts
+  ansible.builtin.set_fact:
+    firmware_version_known: "{{ _nxos_observed_version | length > 0 }}"
+    running_version: "{{ _nxos_observed_version if (_nxos_observed_version | length > 0) else 'unknown' }}"
     target_version: "{{ golden_versions.nxos.version }}"
-    compliant: "{{ (ansible_net_version | default(_nx_facts.ansible_facts.ansible_net_version)) == golden_versions.nxos.version }}"
+    compliant: "{{ (_nxos_observed_version | length > 0) and _nxos_observed_version == golden_versions.nxos.version }}"
 
 - name: Report NX-OS status
   ansible.builtin.debug:
@@ -21,6 +26,7 @@
 - name: Upgrade NX-OS (guarded)
   when:
     - not (compliant | bool)
+    - firmware_version_known | bool
     - apply_cleared | bool
   vars:
     ansible_user: "{{ dev_username }}"
