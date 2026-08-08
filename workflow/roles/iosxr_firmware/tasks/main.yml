@@ -10,9 +10,14 @@
 
 - name: Determine IOS-XR compliance
   ansible.builtin.set_fact:
-    running_version: "{{ ansible_net_version | default(_xr_facts.ansible_facts.ansible_net_version) }}"
+    _iosxr_observed_version: "{{ ansible_net_version | default(_xr_facts.ansible_facts.ansible_net_version | default('', true), true) | string | trim }}"
+
+- name: Set IOS-XR compliance facts
+  ansible.builtin.set_fact:
+    firmware_version_known: "{{ _iosxr_observed_version | length > 0 }}"
+    running_version: "{{ _iosxr_observed_version if (_iosxr_observed_version | length > 0) else 'unknown' }}"
     target_version: "{{ golden_versions.iosxr.version }}"
-    compliant: "{{ (ansible_net_version | default(_xr_facts.ansible_facts.ansible_net_version)) == golden_versions.iosxr.version }}"
+    compliant: "{{ (_iosxr_observed_version | length > 0) and _iosxr_observed_version == golden_versions.iosxr.version }}"
 
 - name: Report IOS-XR status
   ansible.builtin.debug:
@@ -21,6 +26,7 @@
 - name: Upgrade IOS-XR (guarded)
   when:
     - not (compliant | bool)
+    - firmware_version_known | bool
     - apply_cleared | bool
   vars:
     ansible_user: "{{ dev_username }}"

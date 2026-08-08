@@ -13,9 +13,14 @@
 
 - name: Determine IOS compliance
   ansible.builtin.set_fact:
-    running_version: "{{ ansible_net_version | default(_ios_facts.ansible_facts.ansible_net_version) }}"
+    _ios_observed_version: "{{ ansible_net_version | default(_ios_facts.ansible_facts.ansible_net_version | default('', true), true) | string | trim }}"
+
+- name: Set IOS compliance facts
+  ansible.builtin.set_fact:
+    firmware_version_known: "{{ _ios_observed_version | length > 0 }}"
+    running_version: "{{ _ios_observed_version if (_ios_observed_version | length > 0) else 'unknown' }}"
     target_version: "{{ golden_versions.ios.version }}"
-    compliant: "{{ (ansible_net_version | default(_ios_facts.ansible_facts.ansible_net_version)) == golden_versions.ios.version }}"
+    compliant: "{{ (_ios_observed_version | length > 0) and _ios_observed_version == golden_versions.ios.version }}"
 
 - name: Report IOS status
   ansible.builtin.debug:
@@ -24,6 +29,7 @@
 - name: Upgrade IOS (guarded)
   when:
     - not (compliant | bool)
+    - firmware_version_known | bool
     - apply_cleared | bool
   vars:
     ansible_user: "{{ dev_username }}"
