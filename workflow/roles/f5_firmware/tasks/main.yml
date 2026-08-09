@@ -31,6 +31,11 @@
     - not (compliant | bool)
     - apply_cleared | bool
   block:
+    - name: Save running config before UCS backup
+      f5networks.f5_modules.bigip_config:
+        provider: "{{ _f5_provider }}"
+        save: true
+
     - name: Save/backup current config (UCS archive)
       f5networks.f5_modules.bigip_ucs_fetch:
         provider: "{{ _f5_provider }}"
