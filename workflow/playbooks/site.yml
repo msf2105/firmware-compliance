@@ -61,6 +61,8 @@
     - ../vars/golden_versions.yml
   # keep going even if one platform errors — we still want a full report
   any_errors_fatal: false
+  # Re-check the maintenance window immediately before each host's role starts.
+  serial: 1
   tasks:
     - name: Resolve device credentials from Secret Server
       ansible.builtin.include_role:

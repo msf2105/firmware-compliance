@@ -11,10 +11,8 @@
 
 - name: Evaluate maintenance window
   ansible.builtin.set_fact:
-    _now_hour: "{{ ('%H' | strftime(ansible_date_time.epoch | int)) | int if ansible_date_time is defined else (lookup('pipe','date +%H') | int) }}"
+    _now_hour: "{{ lookup('pipe','date +%H') | int }}"
     _now_dow: "{{ (lookup('pipe','date +%u') | int) }}"   # 1=Mon .. 7=Sun
-  run_once: true
-  delegate_to: localhost
 
 - name: Determine if we are inside the maintenance window (handles overnight wrap)
   ansible.builtin.set_fact:
@@ -24,8 +22,6 @@
            or
            (maint_start_hour >= maint_end_hour and ((_now_hour | int) >= maint_start_hour or (_now_hour | int) < maint_end_hour))
          ) }}
-  run_once: true
-  delegate_to: localhost
 
 - name: Compute apply clearance
   ansible.builtin.set_fact:
@@ -33,7 +29,6 @@
       {{ (apply_updates | bool)
          and (in_window | bool)
          and ((not (require_change_ticket | bool)) or (snow_change_number is defined and snow_change_number | length > 0)) }}
-  delegate_to: localhost
 
 - name: Announce mode
   ansible.builtin.debug:
