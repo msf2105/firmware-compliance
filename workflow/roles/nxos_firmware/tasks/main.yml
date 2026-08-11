@@ -22,6 +22,7 @@
   when:
     - not (compliant | bool)
     - apply_cleared | bool
+    - reboot_after_upgrade | bool
   vars:
     ansible_user: "{{ dev_username }}"
     ansible_password: "{{ dev_password }}"
@@ -38,8 +39,7 @@
       cisco.nxos.nxos_install_os:
         system_image_file: "{{ golden_versions.nxos.image_file }}"
       register: _nx_install
-      when: reboot_after_upgrade | bool
 
     - name: Record upgrade action
       ansible.builtin.set_fact:
-        upgrade_action: "nxos_install_os -> {{ target_version }}{{ '' if reboot_after_upgrade | bool else ' (install deferred: reboot_after_upgrade=false)' }}"
+        upgrade_action: "nxos_install_os -> {{ target_version }}"
