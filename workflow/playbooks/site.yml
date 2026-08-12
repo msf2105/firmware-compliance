@@ -55,22 +55,31 @@
 # ---------- Play 2: per-device audit + guarded remediation ----------
 - name: Firmware compliance across all platforms
   hosts: >-
-    ios:iosxr:nxos:asa:aci:dnac:ise:ucs:panos:f5
+    ios:iosxr:nxos:asa:aci:dnac:ise:ucs:panos:f5:localhost
   gather_facts: false
   vars_files:
     - ../vars/golden_versions.yml
   # keep going even if one platform errors — we still want a full report
   any_errors_fatal: false
   tasks:
+    - name: Keep controller host active so final reporting can run
+      ansible.builtin.set_fact:
+        _firmware_compliance_controller_anchor: true
+      changed_when: false
+      when: inventory_hostname == 'localhost'
+
     - name: Resolve device credentials from Secret Server
+      when: inventory_hostname != 'localhost'
       ansible.builtin.include_role:
         name: secret_server
 
     - name: Run preflight safety gate
+      when: inventory_hostname != 'localhost'
       ansible.builtin.include_role:
         name: preflight
 
     - name: Dispatch platform firmware role by group membership
+      when: inventory_hostname != 'localhost'
       ansible.builtin.include_role:
         name: "{{ item }}_firmware"
       # group_names holds every group this host belongs to; the intersection
@@ -79,6 +88,7 @@
 
     - name: Add per-device result work note to change (apply mode)
       when:
+        - inventory_hostname != 'localhost'
         - snow_change_sys_id is defined
         - snow_change_number is defined
       ansible.builtin.include_role:
