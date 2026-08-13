@@ -33,6 +33,9 @@ apply_cleared = apply_updates
 - **Reload is separately gated.** Staging an image is distinct from activating
   it. Reload/reboot only happens when `reboot_after_upgrade=true` (default
   `false`), so you can stage during the day and activate in a later window.
+- **One device at a time by default.** The device play uses `firmware_batch_size`
+  (default `1`) as its rolling batch size so an apply run cannot fan out across
+  the fleet unless an operator explicitly widens the batch.
 - **ISE is audit-only.** Cisco ISE upgrades are node-persona-aware and are not
   safely automatable as a single module call. The `ise_firmware` role reports
   compliance and recommends the manual runbook; it never pushes.

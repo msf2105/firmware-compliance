@@ -49,3 +49,4 @@ golden_versions:
 apply_updates: false          # DRY-RUN by default. true = actually push firmware.
 require_change_ticket: true   # every apply must be wrapped in a SNOW change record
 reboot_after_upgrade: false   # most platforms need a reload to activate; gate it
+firmware_batch_size: 1        # roll firmware work one device at a time by default
