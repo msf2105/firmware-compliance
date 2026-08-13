@@ -59,6 +59,14 @@ Stage **and** reload (highest blast radius):
 ansible-playbook playbooks/site.yml -e apply_updates=true -e reboot_after_upgrade=true
 ```
 
+Apply runs process one device at a time by default (`firmware_batch_size: 1`).
+Only increase the batch size when the approved change explicitly covers a wider
+rolling blast radius:
+
+```bash
+ansible-playbook playbooks/site.yml -e apply_updates=true -e firmware_batch_size=2
+```
+
 ## 4. Override the maintenance window (emergency change)
 
 Requires an approved emergency change. Widen or shift the window with extra-vars:

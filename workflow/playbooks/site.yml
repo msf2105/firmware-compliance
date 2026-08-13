@@ -57,6 +57,7 @@
   hosts: >-
     ios:iosxr:nxos:asa:aci:dnac:ise:ucs:panos:f5
   gather_facts: false
+  serial: "{{ firmware_batch_size | default(1) | int }}"
   vars_files:
     - ../vars/golden_versions.yml
   # keep going even if one platform errors — we still want a full report

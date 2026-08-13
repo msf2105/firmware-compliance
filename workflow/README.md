@@ -21,6 +21,8 @@ drift but never touches the device. Cisco ISE is intentionally **audit-only**
 Additional guardrails baked into each platform role:
 - Running config is **backed up** (to `backups/<host>/`) before any change.
 - Reload/activation is gated behind `reboot_after_upgrade` (default `false`).
+- Firmware work is serialized by default (`firmware_batch_size: 1`) so apply
+  runs do not reboot or mutate multiple devices at once unless explicitly widened.
 - All credential handling uses `no_log: true`.
 
 ## Layout
@@ -77,6 +79,13 @@ ansible-playbook playbooks/site.yml -e apply_updates=true
 
 # Apply AND activate (reload) — highest blast radius, use in a window
 ansible-playbook playbooks/site.yml -e apply_updates=true -e reboot_after_upgrade=true
+```
+
+Firmware work runs one device at a time by default. To use an approved rolling
+batch, set `firmware_batch_size` explicitly:
+
+```bash
+ansible-playbook playbooks/site.yml -e apply_updates=true -e firmware_batch_size=2
 ```
 
 Each run prints a compliance table and writes `reports/compliance-<timestamp>.json`.
