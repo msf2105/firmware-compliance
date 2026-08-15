@@ -32,8 +32,23 @@
           ansible.builtin.assert:
             that:
               - ansible_failed_result is defined
-              - "'compliant' in (ansible_failed_result.msg | default('') | string)"
-              - "'must not be supplied' in (ansible_failed_result.msg | default('') | string)"
+              - >-
+                ansible_failed_result.results
+                | selectattr('item', 'equalto', 'compliant')
+                | selectattr('failed', 'defined')
+                | selectattr('failed')
+                | list
+                | length == 1
+              - >-
+                'must not be supplied' in
+                (
+                  ansible_failed_result.results
+                  | selectattr('item', 'equalto', 'compliant')
+                  | map(attribute='msg')
+                  | first
+                  | default('')
+                  | string
+                )
 
     - name: Spoofed network fact is rejected
       block:
@@ -51,5 +66,20 @@
           ansible.builtin.assert:
             that:
               - ansible_failed_result is defined
-              - "'ansible_net_version' in (ansible_failed_result.msg | default('') | string)"
-              - "'must not be supplied' in (ansible_failed_result.msg | default('') | string)"
+              - >-
+                ansible_failed_result.results
+                | selectattr('item', 'equalto', 'ansible_net_version')
+                | selectattr('failed', 'defined')
+                | selectattr('failed')
+                | list
+                | length == 1
+              - >-
+                'must not be supplied' in
+                (
+                  ansible_failed_result.results
+                  | selectattr('item', 'equalto', 'ansible_net_version')
+                  | map(attribute='msg')
+                  | first
+                  | default('')
+                  | string
+                )
