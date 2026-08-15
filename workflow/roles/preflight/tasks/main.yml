@@ -9,6 +9,20 @@
 # install/upgrade path. Check/audit always runs regardless.
 # =====================================================================
 
+- name: Reject supplied firmware audit result variables
+  ansible.builtin.assert:
+    that:
+      - item not in vars
+    fail_msg: >-
+      Firmware audit variable '{{ item }}' is computed from live device data and
+      must not be supplied via inventory, templates, or extra-vars.
+  loop:
+    - ansible_net_version
+    - running_version
+    - target_version
+    - compliant
+    - upgrade_action
+
 - name: Evaluate maintenance window
   ansible.builtin.set_fact:
     _now_hour: "{{ ('%H' | strftime(ansible_date_time.epoch | int)) | int if ansible_date_time is defined else (lookup('pipe','date +%H') | int) }}"
