@@ -1,0 +1,85 @@
+---
+- name: Verify preflight rejects externally supplied audit facts
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  vars:
+    apply_updates: false
+    require_change_ticket: false
+  tasks:
+    - name: Clean preflight accepts no supplied audit facts
+      ansible.builtin.include_role:
+        name: preflight
+
+    - name: Clean preflight remains dry-run
+      ansible.builtin.assert:
+        that:
+          - not (apply_cleared | bool)
+
+    - name: Spoofed compliant flag is rejected
+      block:
+        - name: Include preflight with supplied compliant flag
+          ansible.builtin.include_role:
+            name: preflight
+          vars:
+            compliant: true
+
+        - name: Fail if compliant spoof was accepted
+          ansible.builtin.fail:
+            msg: Preflight accepted externally supplied compliant flag.
+      rescue:
+        - name: Confirm compliant spoof hit the reserved-variable guard
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result is defined
+              - >-
+                ansible_failed_result.results
+                | selectattr('item', 'equalto', 'compliant')
+                | selectattr('failed', 'defined')
+                | selectattr('failed')
+                | list
+                | length == 1
+              - >-
+                'must not be supplied' in
+                (
+                  ansible_failed_result.results
+                  | selectattr('item', 'equalto', 'compliant')
+                  | map(attribute='msg')
+                  | first
+                  | default('')
+                  | string
+                )
+
+    - name: Spoofed network fact is rejected
+      block:
+        - name: Include preflight with supplied network fact
+          ansible.builtin.include_role:
+            name: preflight
+          vars:
+            ansible_net_version: "17.09.05"
+
+        - name: Fail if network fact spoof was accepted
+          ansible.builtin.fail:
+            msg: Preflight accepted externally supplied ansible_net_version.
+      rescue:
+        - name: Confirm network fact spoof hit the reserved-variable guard
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result is defined
+              - >-
+                ansible_failed_result.results
+                | selectattr('item', 'equalto', 'ansible_net_version')
+                | selectattr('failed', 'defined')
+                | selectattr('failed')
+                | list
+                | length == 1
+              - >-
+                'must not be supplied' in
+                (
+                  ansible_failed_result.results
+                  | selectattr('item', 'equalto', 'ansible_net_version')
+                  | map(attribute='msg')
+                  | first
+                  | default('')
+                  | string
+                )
