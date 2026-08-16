@@ -1,0 +1,17 @@
+---
+- name: Determine ACI observed firmware versions
+  ansible.builtin.set_fact:
+    _aci_controller_versions: "{{ _aci_running.imdata | default([]) | map(attribute='firmwareCtrlrRunning.attributes.version') | select('defined') | list }}"
+    _aci_switch_versions: "{{ _aci_switch_running.imdata | default([]) | map(attribute='firmwareRunning.attributes.version') | select('defined') | list }}"
+    target_version: "apic={{ golden_versions.aci.apic_version }}, switch={{ golden_versions.aci.switch_version }}"
+
+- name: Compute ACI compliance flag
+  ansible.builtin.set_fact:
+    running_version: >-
+      apic={{ (_aci_controller_versions | length > 0) | ternary(_aci_controller_versions | join(', '), 'unknown') }},
+      switch={{ (_aci_switch_versions | length > 0) | ternary(_aci_switch_versions | join(', '), 'unknown') }}
+    compliant: >-
+      {{ (_aci_controller_versions | length > 0)
+         and (_aci_switch_versions | length > 0)
+         and ((_aci_controller_versions | difference([golden_versions.aci.apic_version])) | length == 0)
+         and ((_aci_switch_versions | difference([golden_versions.aci.switch_version])) | length == 0) }}

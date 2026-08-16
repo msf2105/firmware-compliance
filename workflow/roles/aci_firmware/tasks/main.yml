@@ -25,14 +25,20 @@
   register: _aci_running
   no_log: true
 
-- name: Determine ACI compliance
-  ansible.builtin.set_fact:
-    running_version: "{{ (_aci_running.imdata | default([]) | map(attribute='firmwareCtrlrRunning.attributes.version') | list | first) | default('unknown') }}"
-    target_version: "{{ golden_versions.aci.apic_version }}"
+- name: Query ACI switch fabric firmware (running)
+  cisco.aci.aci_rest:
+    host: "{{ ansible_host }}"
+    username: "{{ dev_username }}"
+    password: "{{ dev_password }}"
+    validate_certs: false
+    use_proxy: false
+    method: get
+    path: /api/node/class/topSystem.json?query-target=subtree&target-subtree-class=topSystem,eqptCh,firmwareRunning
+  register: _aci_switch_running
+  no_log: true
 
-- name: Compute ACI compliance flag
-  ansible.builtin.set_fact:
-    compliant: "{{ running_version == target_version }}"
+- name: Determine ACI compliance
+  ansible.builtin.include_tasks: compliance.yml
 
 - name: Report ACI status
   ansible.builtin.debug:
@@ -58,4 +64,4 @@
 
     - name: Record upgrade action
       ansible.builtin.set_fact:
-        upgrade_action: "ACI firmware policy set to switch {{ golden_versions.aci.switch_version }} / apic {{ target_version }} (scheduler activates)"
+        upgrade_action: "ACI firmware policy set to switch {{ golden_versions.aci.switch_version }} / apic {{ golden_versions.aci.apic_version }} (scheduler activates)"
