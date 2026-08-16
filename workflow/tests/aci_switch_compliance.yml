@@ -1,0 +1,89 @@
+---
+- name: ACI compliance includes switch fabric firmware
+  hosts: localhost
+  gather_facts: false
+  vars:
+    golden_versions:
+      aci:
+        apic_version: "6.0(5h)"
+        switch_version: "16.0(5h)"
+  tasks:
+    - name: Mock golden APIC controllers with drifted fabric switches
+      ansible.builtin.set_fact:
+        _aci_running:
+          imdata:
+            - firmwareCtrlrRunning:
+                attributes:
+                  version: "6.0(5h)"
+            - firmwareCtrlrRunning:
+                attributes:
+                  version: "6.0(5h)"
+        _aci_switch_running:
+          imdata:
+            - topSystem:
+                attributes:
+                  role: leaf
+            - firmwareRunning:
+                attributes:
+                  type: switch
+                  version: "15.2(8)"
+            - firmwareRunning:
+                attributes:
+                  type: switch
+                  version: "16.0(5h)"
+
+    - name: Evaluate ACI compliance for drifted switches
+      ansible.builtin.include_tasks: ../roles/aci_firmware/tasks/compliance.yml
+
+    - name: Assert switch drift prevents false compliance
+      ansible.builtin.assert:
+        that:
+          - not (compliant | bool)
+          - running_version == "apic=6.0(5h), 6.0(5h), switch=15.2(8), 16.0(5h)"
+          - target_version == "apic=6.0(5h), switch=16.0(5h)"
+
+    - name: Mock fully compliant APIC controllers and fabric switches
+      ansible.builtin.set_fact:
+        _aci_running:
+          imdata:
+            - firmwareCtrlrRunning:
+                attributes:
+                  version: "6.0(5h)"
+        _aci_switch_running:
+          imdata:
+            - firmwareRunning:
+                attributes:
+                  type: switch
+                  version: "16.0(5h)"
+            - firmwareRunning:
+                attributes:
+                  type: switch
+                  version: "16.0(5h)"
+
+    - name: Evaluate ACI compliance for matching switch versions
+      ansible.builtin.include_tasks: ../roles/aci_firmware/tasks/compliance.yml
+
+    - name: Assert all matching APIC and switch versions are compliant
+      ansible.builtin.assert:
+        that:
+          - compliant | bool
+          - running_version == "apic=6.0(5h), switch=16.0(5h), 16.0(5h)"
+
+    - name: Mock missing switch firmware response
+      ansible.builtin.set_fact:
+        _aci_running:
+          imdata:
+            - firmwareCtrlrRunning:
+                attributes:
+                  version: "6.0(5h)"
+        _aci_switch_running:
+          imdata: []
+
+    - name: Evaluate ACI compliance for missing switch data
+      ansible.builtin.include_tasks: ../roles/aci_firmware/tasks/compliance.yml
+
+    - name: Assert missing switch data fails closed
+      ansible.builtin.assert:
+        that:
+          - not (compliant | bool)
+          - running_version == "apic=6.0(5h), switch=unknown"
