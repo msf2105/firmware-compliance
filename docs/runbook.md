@@ -35,9 +35,12 @@ Touches nothing. Prints a compliance table and writes
 ## 2. Audit a single platform or host
 
 ```bash
-ansible-playbook playbooks/site.yml --limit nxos
-ansible-playbook playbooks/site.yml --limit core-sw01
+ansible-playbook playbooks/site.yml --limit 'nxos,localhost'
+ansible-playbook playbooks/site.yml --limit 'core-sw01,localhost'
 ```
+
+Always include `localhost` in scoped limits. The ServiceNow and report plays run
+on the controller; excluding it would skip those controller-side steps.
 
 ## 3. Remediate (real firmware push)
 

@@ -62,6 +62,17 @@
   # keep going even if one platform errors — we still want a full report
   any_errors_fatal: false
   tasks:
+    - name: Require localhost in scoped runs
+      ansible.builtin.assert:
+        that:
+          - ansible_limit is not defined or 'localhost' in (ansible_limit | string)
+        fail_msg: >-
+          Scoped firmware runs must include localhost so the ServiceNow and
+          compliance-report controller plays are not skipped. Use a limit like
+          --limit 'nxos,localhost' or --limit 'core-sw01,localhost'.
+        success_msg: "Controller plays are included in this run."
+      run_once: true
+
     - name: Resolve device credentials from Secret Server
       ansible.builtin.include_role:
         name: secret_server
