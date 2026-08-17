@@ -67,10 +67,10 @@ Then edit `vars/golden_versions.yml` (your approved software matrix) and
 ansible-playbook playbooks/site.yml
 
 # Audit one platform
-ansible-playbook playbooks/site.yml --limit nxos
+ansible-playbook playbooks/site.yml --limit 'nxos,localhost'
 
 # Dry-run a single host
-ansible-playbook playbooks/site.yml --limit core-sw01
+ansible-playbook playbooks/site.yml --limit 'core-sw01,localhost'
 
 # Real remediation: opens a SNOW change, applies inside the window, closes it
 ansible-playbook playbooks/site.yml -e apply_updates=true
@@ -80,6 +80,8 @@ ansible-playbook playbooks/site.yml -e apply_updates=true -e reboot_after_upgrad
 ```
 
 Each run prints a compliance table and writes `reports/compliance-<timestamp>.json`.
+When using `--limit`, include `localhost` so the controller-side ServiceNow and
+reporting plays still run.
 
 ## How credentials flow
 
