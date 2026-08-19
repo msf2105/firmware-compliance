@@ -38,6 +38,14 @@
         backup_options:
           dir_path: "{{ playbook_dir }}/../backups/{{ inventory_hostname }}"
           filename: "pre-upgrade-{{ ansible_date_time.iso8601_basic_short | default('run') }}.cfg"
+      register: _ios_backup
+
+    - name: Restrict IOS backup file permissions
+      ansible.builtin.file:
+        path: "{{ _ios_backup.backup_path }}"
+        mode: "0600"
+      delegate_to: localhost
+      when: _ios_backup.backup_path is defined
 
     - name: Set boot system to golden image
       cisco.ios.ios_config:
