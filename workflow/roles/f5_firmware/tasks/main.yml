@@ -36,6 +36,7 @@
         provider: "{{ _f5_provider }}"
         src: "pre-upgrade-{{ ansible_date_time.iso8601_basic_short | default('run') }}.ucs"
         dest: "{{ playbook_dir }}/../backups/{{ inventory_hostname }}/pre-upgrade-{{ ansible_date_time.iso8601_basic_short | default('run') }}.ucs"
+        mode: "0600"
 
     - name: Upload golden BIG-IP image
       f5networks.f5_modules.bigip_software_image:

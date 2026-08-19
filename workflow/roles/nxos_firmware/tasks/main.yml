@@ -32,6 +32,14 @@
         backup_options:
           dir_path: "{{ playbook_dir }}/../backups/{{ inventory_hostname }}"
           filename: "pre-upgrade-{{ ansible_date_time.iso8601_basic_short | default('run') }}.cfg"
+      register: _nx_backup
+
+    - name: Restrict NX-OS backup file permissions
+      ansible.builtin.file:
+        path: "{{ _nx_backup.backup_path }}"
+        mode: "0600"
+      delegate_to: localhost
+      when: _nx_backup.backup_path is defined
 
     # nxos_install_os handles copy + install-all + reload orchestration.
     - name: Install NX-OS golden image

@@ -35,6 +35,12 @@
         category: configuration
         filename: "{{ playbook_dir }}/../backups/{{ inventory_hostname }}/pre-upgrade-{{ ansible_date_time.iso8601_basic_short | default('run') }}.xml"
 
+    - name: Restrict PAN-OS backup file permissions
+      ansible.builtin.file:
+        path: "{{ playbook_dir }}/../backups/{{ inventory_hostname }}/pre-upgrade-{{ ansible_date_time.iso8601_basic_short | default('run') }}.xml"
+        mode: "0600"
+      delegate_to: localhost
+
     - name: Download + install target PAN-OS and reboot
       paloaltonetworks.panos.panos_software:
         provider: "{{ _pan_provider }}"

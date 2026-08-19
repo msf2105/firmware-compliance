@@ -32,6 +32,14 @@
         backup_options:
           dir_path: "{{ playbook_dir }}/../backups/{{ inventory_hostname }}"
           filename: "pre-upgrade-{{ ansible_date_time.iso8601_basic_short | default('run') }}.cfg"
+      register: _xr_backup
+
+    - name: Restrict IOS-XR backup file permissions
+      ansible.builtin.file:
+        path: "{{ _xr_backup.backup_path }}"
+        mode: "0600"
+      delegate_to: localhost
+      when: _xr_backup.backup_path is defined
 
     # IOS-XR uses install add/activate/commit. Screen-scrape via iosxr_command
     # because install workflow is version-dependent; verify prompts per release.
