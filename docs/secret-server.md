@@ -47,6 +47,9 @@ role — mapping fields into `dev_*` facts — stays the same.
 
 - The `secret_server` role delegates the lookup to `localhost` (the runner), so
   Secret Server is contacted from the control node, not the devices.
+- Do not pass device credential variables such as `dev_password` or
+  `ansible_password` through inventory, surveys, or `-e`; the role fails closed
+  so Secret Server remains the only credential source for devices.
 - Never echo `dev_password` / `_tss_secret` in debug tasks — `no_log` is set for
   a reason. When troubleshooting, test the lookup in isolation with a throwaway
   secret, not by removing `no_log`.

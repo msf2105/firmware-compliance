@@ -13,6 +13,31 @@
 # explicitly from inventory so the SoT stays visible.
 # =====================================================================
 
+- name: Reject pre-supplied device credential variables
+  ansible.builtin.assert:
+    that:
+      - vars[item] is not defined
+    fail_msg: >-
+      Refusing to use pre-supplied credential variable '{{ item }}'. Device
+      credentials must be resolved from Secret Server by this role.
+  loop:
+    - dev_username
+    - dev_password
+    - dev_enable
+    - ansible_user
+    - ansible_password
+    - ansible_ssh_user
+    - ansible_ssh_pass
+    - ansible_ssh_password
+    - ansible_become_password
+    - ansible_become_pass
+    - ansible_httpapi_username
+    - ansible_httpapi_password
+    - _tss_secret
+    - _pan_provider
+    - _f5_provider
+  delegate_to: localhost
+
 - name: Assert this host has a secret_id
   ansible.builtin.assert:
     that:
