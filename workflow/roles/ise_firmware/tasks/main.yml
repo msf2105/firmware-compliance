@@ -1,21 +1,9 @@
 ---
 # ise_firmware — Cisco ISE version/patch compliance.
+# Now with automatic latest-version determination via firmware_check.py.
 # ISE upgrades are node-persona-aware and NOT safely automatable via a single
 # module call; this role AUDITS the running version + patch level against the
-# golden target and reports. Remediation is intentionally report-only: it opens
-# a ServiceNow note recommending the ISE upgrade runbook rather than pushing.
-- name: Query ISE node/version info
-  cisco.ise.node_services_profiler_probe_config_info:
-    ise_hostname: "{{ ansible_host }}"
-    ise_username: "{{ dev_username }}"
-    ise_password: "{{ dev_password }}"
-    ise_verify: false
-    hostname: "{{ inventory_hostname }}"
-  register: _ise_info
-  ignore_errors: true
-  no_log: true
-
-# The version endpoint varies by ISE release; use the versioninfo op if present.
+# golden target and reports. Remediation is intentionally report-only.
 - name: Query ISE version info (best effort)
   cisco.ise.backup_last_status_info:
     ise_hostname: "{{ ansible_host }}"
@@ -26,17 +14,36 @@
   ignore_errors: true
   no_log: true
 
-- name: Determine ISE compliance target (audit-only)
+- name: Determine ISE running version
   ansible.builtin.set_fact:
-    target_version: "{{ golden_versions.ise.version }} patch {{ golden_versions.ise.patch }}"
     running_version: "{{ _ise_ver.response.version | default('query via ISE admin / GUI — see note') }}"
-    compliant: "{{ (_ise_ver.response.version | default('')) == golden_versions.ise.version }}"
+
+- name: Evaluate version compliance (smart comparison via firmware_check.py)
+  ansible.builtin.command:
+    cmd: >-
+      python3 {{ playbook_dir }}/../scripts/firmware_check.py
+      --platform ise --running "{{ running_version }}" --host "{{ inventory_hostname }}"
+      --yaml {{ playbook_dir }}/../vars/golden_versions.yml
+      {{ ('--product-id ' ~ golden_versions.ise.cisco_pid) if golden_versions.ise.cisco_pid is defined else '' }}
+      --output ansible_facts
+  delegate_to: localhost
+  changed_when: false
+  register: _ise_check
+
+- name: Parse compliance result
+  ansible.builtin.set_fact:
+    target_version: "{{ (_ise_check.stdout | from_json)['firmware_check_' + inventory_hostname].effective_latest }}"
+    compliant: "{{ (_ise_check.stdout | from_json)['firmware_check_' + inventory_hostname].is_compliant }}"
+    is_latest: "{{ (_ise_check.stdout | from_json)['firmware_check_' + inventory_hostname].is_latest }}"
+    version_status: "{{ (_ise_check.stdout | from_json)['firmware_check_' + inventory_hostname].status_compliant }}"
+    platform_label: "ise"
 
 - name: Report ISE status
   ansible.builtin.debug:
-    msg: >-
+    msg: >
       ISE {{ inventory_hostname }} running={{ running_version }}
-      target={{ target_version }} compliant={{ compliant }}
+      latest={{ target_version }} compliant={{ compliant }} is_latest={{ is_latest }}
+      status={{ version_status }}
       (ISE remediation is report-only: follow the ISE upgrade runbook — persona-aware)
 
 - name: Flag ISE non-compliance for manual runbook (guarded note)

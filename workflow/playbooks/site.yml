@@ -3,7 +3,9 @@
 # site.yml — multi-platform firmware compliance orchestrator.
 #
 # Flow:
-#   Play 1 (localhost)  Optionally open a ServiceNow change request.
+#   Play 1 (localhost)  Open a normal (CAB-reviewed) SNOW change, OR verify
+#                       the approval state of an existing one. If CAB has
+#                       not approved, the run proceeds as audit-only.
 #   Play 2 (devices)    Per host: fetch creds from Secret Server, run the
 #                       preflight safety gate, then dispatch the platform
 #                       role by group membership. Each role AUDITS always
@@ -12,36 +14,79 @@
 #
 # SAFETY: dry-run (audit-only) is the DEFAULT. A real firmware push needs,
 # all at once:  -e apply_updates=true  AND  inside the maintenance window
-# AND (by default) a ServiceNow change ticket. Miss any one -> audit only.
+# AND (by default) a ServiceNow change ticket  AND  CAB approval on that
+# ticket. Miss any one -> audit only.
+#
+# CAB APPROVAL WORKFLOW:
+#   Run 1 (open):  ansible-playbook playbooks/site.yml -e apply_updates=true
+#                  → Opens a normal SNOW change, audits all devices, does NOT
+#                    apply. Prints the change number for CAB review.
+#   CAB reviews and approves the change in ServiceNow.
+#   Run 2 (apply): ansible-playbook playbooks/site.yml -e apply_updates=true
+#                      -e snow_change_number=CHGxxxxxx
+#                  → Verifies approval=approved, then applies inside window.
 #
 # Usage:
 #   Audit everything (safe, default):
 #     ansible-playbook playbooks/site.yml
 #   Audit a single platform:
 #     ansible-playbook playbooks/site.yml --limit nxos
-#   Real remediation (inside window, opens/closes a SNOW change):
+#   Open a change for CAB review (audits, does not apply):
 #     ansible-playbook playbooks/site.yml -e apply_updates=true
+#   Apply after CAB approval (inside window):
+#     ansible-playbook playbooks/site.yml -e apply_updates=true -e snow_change_number=CHGxxxxxx
 #
 # Required env (never stored in repo):
 #   TSS_USERNAME / TSS_PASSWORD        Delinea Secret Server auth
 #   SNOW_INSTANCE / SNOW_USERNAME / SNOW_PASSWORD   ServiceNow auth
 # =====================================================================
 
-# ---------- Play 1: open the change record (apply mode only) ----------
-- name: Open ServiceNow change (apply mode)
+# ---------- Play 1: open or verify the change record (apply mode) ----------
+- name: Open or verify ServiceNow change (apply mode)
   hosts: localhost
   gather_facts: true
   vars_files:
     - ../vars/golden_versions.yml
   tasks:
-    - name: Open change request when applying updates
+    # If the operator passed snow_change_number, we're re-running after CAB
+    # review — query the existing change's approval state instead of opening
+    # a new one.
+    - name: Check CAB approval on existing change
       when:
         - apply_updates | bool
         - require_change_ticket | bool
+        - snow_change_number is defined
+        - snow_change_number | length > 0
+      ansible.builtin.include_role:
+        name: servicenow
+      vars:
+        snow_action: check_approval
+
+    # No change number provided — this is a first run. Open a new normal
+    # (CAB-reviewed) change request. The playbook will audit but NOT apply
+    # until the CAB approves and the operator re-runs with the change number.
+    - name: Open new normal change request
+      when:
+        - apply_updates | bool
+        - require_change_ticket | bool
+        - snow_change_number is not defined or snow_change_number | length == 0
       ansible.builtin.include_role:
         name: servicenow
       vars:
         snow_action: open
+
+    - name: Warn that CAB approval is pending (first run)
+      when:
+        - apply_updates | bool
+        - require_change_ticket | bool
+        - require_cab_approval | bool
+        - cab_approved is not defined or not (cab_approved | bool)
+      ansible.builtin.debug:
+        msg: >-
+          CAB APPROVAL REQUIRED — Change {{ snow_change_number | default('pending') }}
+          is not yet approved. This run will AUDIT ONLY. After the CAB approves
+          the change, re-run: ansible-playbook playbooks/site.yml -e apply_updates=true
+          -e snow_change_number={{ snow_change_number | default('CHGxxxxxx') }}
 
     - name: Publish change identifiers to all device hosts
       when: snow_change_number is defined
@@ -49,6 +94,7 @@
         name: "{{ item }}"
         snow_change_sys_id: "{{ snow_change_sys_id }}"
         snow_change_number: "{{ snow_change_number }}"
+        cab_approved: "{{ cab_approved | default(false) }}"
       loop: "{{ groups['all'] | difference(['ungrouped', 'localhost']) }}"
       changed_when: false
 
@@ -109,15 +155,31 @@
       ansible.builtin.include_role:
         name: compliance_report
 
-    - name: Close ServiceNow change (apply mode)
+    - name: Close ServiceNow change (apply mode, CAB approved)
       when:
         - snow_change_sys_id is defined
         - snow_change_number is defined
+        - cab_approved | default(false) | bool
       ansible.builtin.include_role:
         name: servicenow
       vars:
         snow_action: close
         snow_close_code: successful
         snow_close_notes: >-
-          Firmware compliance run complete. See attached Ansible report artifact
-          under reports/. Mode: {{ 'APPLY' if apply_updates | bool else 'DRY-RUN' }}.
+          Firmware compliance run complete. CAB approval was verified.
+          See attached Ansible report artifact under reports/.
+          Mode: {{ 'APPLY' if apply_updates | bool else 'DRY-RUN' }}.
+
+    - name: Add note to unapproved change (audit-only outcome)
+      when:
+        - snow_change_sys_id is defined
+        - snow_change_number is defined
+        - not (cab_approved | default(false) | bool)
+      ansible.builtin.include_role:
+        name: servicenow
+      vars:
+        snow_action: note
+        snow_note: >-
+          Firmware compliance audit completed. No changes were applied —
+          CAB approval is pending. See report artifact under reports/.
+          Mode: DRY-RUN (CAB not approved).

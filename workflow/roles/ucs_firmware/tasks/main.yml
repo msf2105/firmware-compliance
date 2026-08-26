@@ -1,5 +1,6 @@
 ---
 # ucs_firmware — Cisco UCS Manager infrastructure bundle check.
+# Now with automatic latest-version determination via firmware_check.py.
 # Version comparison + firmware auto-install (guarded). UCS firmware upgrade
 # is a multi-stage, service-impacting operation; this role AUDITS by default
 # and only stages the infra bundle activation when cleared + reboot allowed.
@@ -15,18 +16,36 @@
   ignore_errors: true
   no_log: true
 
-- name: Determine UCS compliance (best-effort parse)
+- name: Determine UCS running version (best-effort parse)
   ansible.builtin.set_fact:
     running_version: "{{ (_ucs_running.objects | default([]) | selectattr('deployment','defined') | selectattr('deployment','equalto','system') | map(attribute='version') | list | first) | default('unknown') }}"
-    target_version: "{{ golden_versions.ucs.version }}"
 
-- name: Compute UCS compliance flag
+- name: Evaluate version compliance (smart comparison via firmware_check.py)
+  ansible.builtin.command:
+    cmd: >-
+      python3 {{ playbook_dir }}/../scripts/firmware_check.py
+      --platform ucs --running "{{ running_version }}" --host "{{ inventory_hostname }}"
+      --yaml {{ playbook_dir }}/../vars/golden_versions.yml
+      {{ ('--product-id ' ~ golden_versions.ucs.cisco_pid) if golden_versions.ucs.cisco_pid is defined else '' }}
+      --output ansible_facts
+  delegate_to: localhost
+  changed_when: false
+  register: _ucs_check
+
+- name: Parse compliance result
   ansible.builtin.set_fact:
-    compliant: "{{ running_version == target_version }}"
+    target_version: "{{ (_ucs_check.stdout | from_json)['firmware_check_' + inventory_hostname].effective_latest }}"
+    compliant: "{{ (_ucs_check.stdout | from_json)['firmware_check_' + inventory_hostname].is_compliant }}"
+    is_latest: "{{ (_ucs_check.stdout | from_json)['firmware_check_' + inventory_hostname].is_latest }}"
+    version_status: "{{ (_ucs_check.stdout | from_json)['firmware_check_' + inventory_hostname].status_compliant }}"
+    platform_label: "ucs"
 
 - name: Report UCS status
   ansible.builtin.debug:
-    msg: "UCSM {{ inventory_hostname }} running={{ running_version }} target={{ target_version }} compliant={{ compliant }}"
+    msg: >
+      UCSM {{ inventory_hostname }} running={{ running_version }}
+      latest={{ target_version }} compliant={{ compliant }} is_latest={{ is_latest }}
+      status={{ version_status }}
 
 - name: Stage UCS infra firmware (guarded)
   when:

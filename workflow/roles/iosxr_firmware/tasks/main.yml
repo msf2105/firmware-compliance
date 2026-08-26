@@ -1,5 +1,6 @@
 ---
 # iosxr_firmware — Cisco IOS-XR version check + guarded upgrade.
+# Now with automatic latest-version determination via firmware_check.py.
 - name: Gather IOS-XR facts
   cisco.iosxr.iosxr_facts:
     gather_subset: [hardware]
@@ -8,15 +9,36 @@
     ansible_password: "{{ dev_password }}"
   register: _xr_facts
 
-- name: Determine IOS-XR compliance
+- name: Determine IOS-XR running version
   ansible.builtin.set_fact:
     running_version: "{{ ansible_net_version | default(_xr_facts.ansible_facts.ansible_net_version) }}"
-    target_version: "{{ golden_versions.iosxr.version }}"
-    compliant: "{{ (ansible_net_version | default(_xr_facts.ansible_facts.ansible_net_version)) == golden_versions.iosxr.version }}"
+
+- name: Evaluate version compliance (smart comparison via firmware_check.py)
+  ansible.builtin.command:
+    cmd: >-
+      python3 {{ playbook_dir }}/../scripts/firmware_check.py
+      --platform iosxr --running "{{ running_version }}" --host "{{ inventory_hostname }}"
+      --yaml {{ playbook_dir }}/../vars/golden_versions.yml
+      {{ ('--product-id ' ~ golden_versions.iosxr.cisco_pid) if golden_versions.iosxr.cisco_pid is defined else '' }}
+      --output ansible_facts
+  delegate_to: localhost
+  changed_when: false
+  register: _xr_check
+
+- name: Parse compliance result
+  ansible.builtin.set_fact:
+    target_version: "{{ (_xr_check.stdout | from_json)['firmware_check_' + inventory_hostname].effective_latest }}"
+    compliant: "{{ (_xr_check.stdout | from_json)['firmware_check_' + inventory_hostname].is_compliant }}"
+    is_latest: "{{ (_xr_check.stdout | from_json)['firmware_check_' + inventory_hostname].is_latest }}"
+    version_status: "{{ (_xr_check.stdout | from_json)['firmware_check_' + inventory_hostname].status_compliant }}"
+    platform_label: "iosxr"
 
 - name: Report IOS-XR status
   ansible.builtin.debug:
-    msg: "IOS-XR {{ inventory_hostname }} running={{ running_version }} target={{ target_version }} compliant={{ compliant }}"
+    msg: >
+      IOS-XR {{ inventory_hostname }} running={{ running_version }}
+      latest={{ target_version }} compliant={{ compliant }} is_latest={{ is_latest }}
+      status={{ version_status }}
 
 - name: Upgrade IOS-XR (guarded)
   when:

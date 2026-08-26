@@ -1,5 +1,8 @@
 ---
 # panos_firmware — Palo Alto PAN-OS version check + guarded upgrade.
+# Discovers the latest available PAN-OS version by querying the device's
+# built-in software check API, then passes it to firmware_check.py via
+# --latest-version for comparison against the running version.
 - name: Build PAN-OS provider
   ansible.builtin.set_fact:
     _pan_provider:
@@ -8,21 +11,80 @@
       password: "{{ dev_password }}"
   no_log: true
 
+- name: Generate PAN-OS API key for device-local software check
+  ansible.builtin.uri:
+    url: "https://{{ ansible_host }}/api/?type=keygen&user={{ dev_username }}&password={{ dev_password | urlencode }}"
+    method: GET
+    validate_certs: false
+    return_content: true
+    timeout: 30
+  register: _pan_keygen
+  delegate_to: localhost
+  no_log: true
+  ignore_errors: true
+
+- name: Extract API key
+  ansible.builtin.set_fact:
+    _pan_api_key: "{{ _pan_keygen.content | regex_search('<key>([^<]+)</key>', '\\1') | first if (_pan_keygen is success and _pan_keygen.content is defined) else '' }}"
+  no_log: true
+  when: _pan_keygen is success
+
 - name: Gather PAN-OS system info
   paloaltonetworks.panos.panos_facts:
     provider: "{{ _pan_provider }}"
     gather_subset: [system]
   register: _pan_facts
 
-- name: Determine PAN-OS compliance
+- name: Determine PAN-OS running version
   ansible.builtin.set_fact:
     running_version: "{{ _pan_facts.ansible_facts.ansible_net_version | default(ansible_net_version) }}"
-    target_version: "{{ golden_versions.panos.version }}"
-    compliant: "{{ (_pan_facts.ansible_facts.ansible_net_version | default(ansible_net_version)) == golden_versions.panos.version }}"
+
+- name: Check for available PAN-OS software updates (device-local API)
+  ansible.builtin.uri:
+    url: "https://{{ ansible_host }}/api/?type=op&cmd=<request><system><software><check></check></software></system></request>&key={{ _pan_api_key }}"
+    method: POST
+    validate_certs: false
+    return_content: true
+    timeout: 60
+  register: _pan_sw_check
+  delegate_to: localhost
+  no_log: true
+  ignore_errors: true
+
+- name: Parse latest available PAN-OS version from software check response
+  ansible.builtin.set_fact:
+    _pan_latest_available: >-
+      {{ (_pan_sw_check.content | default('') | regex_search('<version>([^<]+)</version>', '\\1') | first)
+         if (_pan_sw_check is success and _pan_sw_check.content is defined and '<version>' in _pan_sw_check.content)
+         else '' }}
+  delegate_to: localhost
+
+- name: Evaluate version compliance (smart comparison via firmware_check.py)
+  ansible.builtin.command:
+    cmd: >-
+      python3 {{ playbook_dir }}/../scripts/firmware_check.py
+      --platform panos --running "{{ running_version }}" --host "{{ inventory_hostname }}"
+      --yaml {{ playbook_dir }}/../vars/golden_versions.yml
+      {{ ('--latest-version ' ~ _pan_latest_available) if _pan_latest_available | length > 0 else '' }}
+      --output ansible_facts
+  delegate_to: localhost
+  changed_when: false
+  register: _pan_check
+
+- name: Parse compliance result
+  ansible.builtin.set_fact:
+    target_version: "{{ (_pan_check.stdout | from_json)['firmware_check_' + inventory_hostname].effective_latest }}"
+    compliant: "{{ (_pan_check.stdout | from_json)['firmware_check_' + inventory_hostname].is_compliant }}"
+    is_latest: "{{ (_pan_check.stdout | from_json)['firmware_check_' + inventory_hostname].is_latest }}"
+    version_status: "{{ (_pan_check.stdout | from_json)['firmware_check_' + inventory_hostname].status_compliant }}"
+    platform_label: "panos"
 
 - name: Report PAN-OS status
   ansible.builtin.debug:
-    msg: "PAN-OS {{ inventory_hostname }} running={{ running_version }} target={{ target_version }} compliant={{ compliant }}"
+    msg: >
+      PAN-OS {{ inventory_hostname }} running={{ running_version }}
+      latest={{ target_version }} compliant={{ compliant }} is_latest={{ is_latest }}
+      status={{ version_status }}
 
 - name: Upgrade PAN-OS (guarded)
   when:

@@ -22,6 +22,8 @@
           'running': hostvars[item].running_version | default('n/a'),
           'target': hostvars[item].target_version | default('n/a'),
           'compliant': hostvars[item].compliant | default(false),
+          'is_latest': hostvars[item].is_latest | default('n/a'),
+          'version_status': hostvars[item].version_status | default('n/a'),
           'action': hostvars[item].upgrade_action | default('') } ] }}
   loop: "{{ groups['all'] | difference(['ungrouped']) }}"
   run_once: true
@@ -32,9 +34,9 @@
   ansible.builtin.debug:
     msg: |
       ================ FIRMWARE COMPLIANCE REPORT ================
-      Mode: {{ 'APPLY' if apply_updates | bool else 'DRY-RUN' }}   Change: {{ snow_change_number | default('none') }}
+      Mode: {{ 'APPLY' if apply_updates | bool else 'DRY-RUN' }}   Change: {{ snow_change_number | default('none') }}   CAB: {{ (cab_approval_state | default('n/a')) | upper }}
       {% for r in _rows | default([]) %}
-      [{{ 'OK ' if r.compliant else 'DRIFT' }}] {{ '%-14s' | format(r.host) }} {{ '%-8s' | format(r.platform) }} run={{ r.running }} -> tgt={{ r.target }} {{ ('| ' + r.action) if r.action else '' }}
+      [{{ 'OK ' if r.compliant else 'DRIFT' }}] {{ '%-14s' | format(r.host) }} {{ '%-8s' | format(r.platform) }} run={{ r.running }} -> tgt={{ r.target }} latest={{ r.is_latest }} status={{ r.version_status }} {{ ('| ' + r.action) if r.action else '' }}
       {% endfor %}
       ===========================================================
       Compliant: {{ _rows | default([]) | selectattr('compliant') | list | length }}/{{ _rows | default([]) | length }}
@@ -43,7 +45,7 @@
 
 - name: Write JSON report artifact
   ansible.builtin.copy:
-    content: "{{ {'generated': ansible_date_time.iso8601 | default(lookup('pipe','date -Iseconds')), 'mode': ('apply' if apply_updates | bool else 'dry-run'), 'change': (snow_change_number | default('none')), 'results': (_rows | default([]))} | to_nice_json }}"
+    content: "{{ {'generated': ansible_date_time.iso8601 | default(lookup('pipe','date -Iseconds')), 'mode': ('apply' if apply_updates | bool else 'dry-run'), 'change': (snow_change_number | default('none')), 'cab_approval': (cab_approval_state | default('n/a')), 'results': (_rows | default([]))} | to_nice_json }}"
     dest: "{{ playbook_dir }}/../reports/compliance-{{ ansible_date_time.iso8601_basic_short | default('run') }}.json"
     mode: "0644"
   run_once: true

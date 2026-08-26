@@ -1,8 +1,6 @@
 ---
 # dnac_firmware — Cisco Catalyst Center (DNA Center) SWIM compliance.
-# Catalyst Center manages device images centrally (SWIM). This role queries the
-# golden image tag and reports network devices whose running image differs.
-# Actual distribute/activate is service-impacting and gated.
+# Now with automatic latest-version determination via firmware_check.py.
 - name: Build Catalyst Center connection params
   ansible.builtin.set_fact:
     _catc:
@@ -30,12 +28,32 @@
     running_version: "{{ (_catc_images.response | default([]) | length) | ternary('golden image imported', 'golden image MISSING') }}"
     compliant: "{{ (_catc_images.response | default([]) | length) > 0 }}"
 
+- name: Evaluate version compliance (smart comparison via firmware_check.py)
+  ansible.builtin.command:
+    cmd: >-
+      python3 {{ playbook_dir }}/../scripts/firmware_check.py
+      --platform dnac --running "{{ running_version }}" --host "{{ inventory_hostname }}"
+      --yaml {{ playbook_dir }}/../vars/golden_versions.yml
+      {{ ('--product-id ' ~ golden_versions.dnac.cisco_pid) if golden_versions.dnac.cisco_pid is defined else '' }}
+      --output ansible_facts
+  delegate_to: localhost
+  changed_when: false
+  register: _dnac_check
+
+- name: Parse compliance result
+  ansible.builtin.set_fact:
+    target_version: "{{ (_dnac_check.stdout | from_json)['firmware_check_' + inventory_hostname].effective_latest }}"
+    compliant: "{{ (_dnac_check.stdout | from_json)['firmware_check_' + inventory_hostname].is_compliant }}"
+    is_latest: "{{ (_dnac_check.stdout | from_json)['firmware_check_' + inventory_hostname].is_latest }}"
+    version_status: "{{ (_dnac_check.stdout | from_json)['firmware_check_' + inventory_hostname].status_compliant }}"
+    platform_label: "dnac"
+
 - name: Report Catalyst Center status
   ansible.builtin.debug:
-    msg: >-
-      CatalystCenter {{ inventory_hostname }} golden={{ target_version }}
-      status='{{ running_version }}' compliant={{ compliant }}
-      (per-device SWIM distribution reviewed via Catalyst Center compliance dashboard)
+    msg: >
+      CatalystCenter {{ inventory_hostname }} running={{ running_version }}
+      latest={{ target_version }} compliant={{ compliant }} is_latest={{ is_latest }}
+      status={{ version_status }}
 
 - name: Import golden image + tag golden (guarded)
   when:

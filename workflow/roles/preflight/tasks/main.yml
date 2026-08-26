@@ -5,6 +5,8 @@
 #   * apply_updates == true            (explicit operator intent)
 #   * inside the maintenance window     (time-boxed change)
 #   * a change ticket exists (when require_change_ticket)
+#   * CAB approval granted (when require_cab_approval; approval=approved
+#     in the SNOW normal change record)
 # Sets fact `apply_cleared` used by every platform role to guard the
 # install/upgrade path. Check/audit always runs regardless.
 # =====================================================================
@@ -32,7 +34,8 @@
     apply_cleared: >-
       {{ (apply_updates | bool)
          and (in_window | bool)
-         and ((not (require_change_ticket | bool)) or (snow_change_number is defined and snow_change_number | length > 0)) }}
+         and ((not (require_change_ticket | bool)) or (snow_change_number is defined and snow_change_number | length > 0))
+         and ((not (require_cab_approval | bool)) or (cab_approved | default(false) | bool)) }}
   delegate_to: localhost
 
 - name: Announce mode
@@ -41,4 +44,5 @@
       MODE: {{ 'APPLY' if apply_cleared | bool else 'DRY-RUN (audit only)' }}
       | apply_updates={{ apply_updates }} in_window={{ in_window }}
       change_ticket={{ snow_change_number | default('none') }}
+      cab_approved={{ cab_approved | default('n/a') }}
   run_once: true

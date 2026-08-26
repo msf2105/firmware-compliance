@@ -1,10 +1,13 @@
 ---
 # =====================================================================
-# servicenow — ITSM change-record integration. Two entry points via the
+# servicenow — ITSM change-record integration. Entry points via the
 # `snow_action` var:
-#   open   -> create a Change Request, register snow_change_sys_id/number
-#   note   -> add a work note (per-device compliance/upgrade result)
-#   close  -> move the change to Review/Closed with an outcome
+#   open             -> create a normal (CAB-reviewed) Change Request,
+#                       register snow_change_sys_id/number
+#   check_approval   -> query an existing change's approval field;
+#                       sets cab_approved true/false
+#   note             -> add a work note (per-device compliance/upgrade result)
+#   close            -> move the change to Review/Closed with an outcome
 #
 # SNOW auth via env: SNOW_INSTANCE, SNOW_USERNAME, SNOW_PASSWORD.
 # =====================================================================
@@ -12,18 +15,20 @@
 - name: Open change request
   when: snow_action == 'open'
   block:
-    - name: Create ServiceNow change request
+    - name: Create ServiceNow normal change request (CAB-reviewed)
       servicenow.itsm.change_request:
         instance:
           host: "{{ lookup('env', 'SNOW_INSTANCE') }}"
           username: "{{ lookup('env', 'SNOW_USERNAME') }}"
           password: "{{ lookup('env', 'SNOW_PASSWORD') }}"
-        type: standard
+        type: normal
         state: assess
+        assignment_group: "{{ snow_assignment_group | default(omit) }}"
         short_description: "Automated firmware compliance run {{ ansible_date_time.iso8601 | default(lookup('pipe','date -Iseconds')) }}"
         description: >-
           Multi-platform firmware compliance / remediation initiated by Ansible.
           apply_updates={{ apply_updates }}. Targets: {{ groups['all'] | difference(['ungrouped']) | join(', ') }}.
+          This change requires CAB review and approval before any firmware is applied.
       register: _snow_cr
       delegate_to: localhost
       run_once: true
@@ -34,6 +39,34 @@
         snow_change_number: "{{ _snow_cr.record.number }}"
       delegate_to: localhost
       run_once: true
+
+- name: Check CAB approval status of an existing change
+  when: snow_action == 'check_approval'
+  block:
+    - name: Query change request approval state
+      servicenow.itsm.change_request_info:
+        instance:
+          host: "{{ lookup('env', 'SNOW_INSTANCE') }}"
+          username: "{{ lookup('env', 'SNOW_USERNAME') }}"
+          password: "{{ lookup('env', 'SNOW_PASSWORD') }}"
+        number: "{{ snow_change_number }}"
+      register: _snow_cr_info
+      delegate_to: localhost
+
+    - name: Set cab_approved fact based on SNOW approval field
+      ansible.builtin.set_fact:
+        cab_approved: "{{ _snow_cr_info.records[0].approval | default('requested') | trim == 'approved' }}"
+        cab_approval_state: "{{ _snow_cr_info.records[0].approval | default('requested') | trim }}"
+        snow_change_sys_id: "{{ _snow_cr_info.records[0].sys_id | default(omit) }}"
+      delegate_to: localhost
+
+    - name: Announce CAB approval status
+      ansible.builtin.debug:
+        msg: >-
+          CAB approval for {{ snow_change_number }}:
+          {{ cab_approval_state | upper }}
+          {{ '— cleared to proceed' if cab_approved | bool else '— NOT approved, audit only' }}
+      delegate_to: localhost
 
 - name: Add work note to change
   when: snow_action == 'note'

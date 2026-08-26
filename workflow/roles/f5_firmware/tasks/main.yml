@@ -1,5 +1,8 @@
 ---
 # f5_firmware — F5 BIG-IP version check + guarded volume install.
+# Discovers the latest available BIG-OS version by querying the device's
+# iControl REST software update endpoint, then passes it to firmware_check.py
+# via --latest-version for comparison against the running version.
 - name: Build F5 provider
   ansible.builtin.set_fact:
     _f5_provider:
@@ -10,21 +13,92 @@
       validate_certs: false
   no_log: true
 
+- name: Build F5 REST auth payload
+  ansible.builtin.set_fact:
+    _f5_auth_body: "{{ {'username': dev_username, 'password': dev_password, 'loginProviderName': 'tmos'} | to_json }}"
+  no_log: true
+
+- name: Get F5 REST auth token
+  ansible.builtin.uri:
+    url: "https://{{ ansible_host }}:443/mgmt/shared/authn/login"
+    method: POST
+    body: "{{ _f5_auth_body }}"
+    body_format: json
+    validate_certs: false
+    return_content: true
+    timeout: 30
+  register: _f5_auth
+  delegate_to: localhost
+  no_log: true
+  ignore_errors: true
+
+- name: Extract F5 REST token
+  ansible.builtin.set_fact:
+    _f5_token: "{{ _f5_auth.json.token.token if (_f5_auth is success and _f5_auth.json is defined) else '' }}"
+  no_log: true
+  when: _f5_auth is success
+
+- name: Check for available BIG-IP software updates (iControl REST)
+  ansible.builtin.uri:
+    url: "https://{{ ansible_host }}:443/mgmt/tm/sys/software/update"
+    method: GET
+    headers:
+      X-F5-Auth-Token: "{{ _f5_token }}"
+    validate_certs: false
+    return_content: true
+    timeout: 30
+  register: _f5_sw_update
+  delegate_to: localhost
+  no_log: true
+  ignore_errors: true
+
+- name: Parse latest available F5 version from update response
+  ansible.builtin.set_fact:
+    _f5_latest_available: >-
+      {{ _f5_sw_update.json.entries.MCPDeviceOptions.nestedStats.entries.factiveBuildVersion.description
+         if (_f5_sw_update is success and _f5_sw_update.json is defined
+             and _f5_sw_update.json.entries is defined
+             and _f5_sw_update.json.entries.MCPDeviceOptions is defined
+             and _f5_sw_update.json.entries.MCPDeviceOptions.nestedStats.entries.factiveBuildVersion is defined)
+         else '' }}
+  delegate_to: localhost
+
 - name: Gather BIG-IP device info
   f5networks.f5_modules.bigip_device_info:
     provider: "{{ _f5_provider }}"
     gather_subset: [system-info]
   register: _f5_info
 
-- name: Determine F5 compliance
+- name: Determine F5 running version
   ansible.builtin.set_fact:
     running_version: "{{ _f5_info.system_info.product_version | default('unknown') }}"
-    target_version: "{{ golden_versions.f5.version }}"
-    compliant: "{{ (_f5_info.system_info.product_version | default('unknown')) == golden_versions.f5.version }}"
+
+- name: Evaluate version compliance (smart comparison via firmware_check.py)
+  ansible.builtin.command:
+    cmd: >-
+      python3 {{ playbook_dir }}/../scripts/firmware_check.py
+      --platform f5 --running "{{ running_version }}" --host "{{ inventory_hostname }}"
+      --yaml {{ playbook_dir }}/../vars/golden_versions.yml
+      {{ ('--latest-version ' ~ _f5_latest_available) if _f5_latest_available | length > 0 else '' }}
+      --output ansible_facts
+  delegate_to: localhost
+  changed_when: false
+  register: _f5_check
+
+- name: Parse compliance result
+  ansible.builtin.set_fact:
+    target_version: "{{ (_f5_check.stdout | from_json)['firmware_check_' + inventory_hostname].effective_latest }}"
+    compliant: "{{ (_f5_check.stdout | from_json)['firmware_check_' + inventory_hostname].is_compliant }}"
+    is_latest: "{{ (_f5_check.stdout | from_json)['firmware_check_' + inventory_hostname].is_latest }}"
+    version_status: "{{ (_f5_check.stdout | from_json)['firmware_check_' + inventory_hostname].status_compliant }}"
+    platform_label: "f5"
 
 - name: Report F5 status
   ansible.builtin.debug:
-    msg: "BIG-IP {{ inventory_hostname }} running={{ running_version }} target={{ target_version }} compliant={{ compliant }}"
+    msg: >
+      BIG-IP {{ inventory_hostname }} running={{ running_version }}
+      latest={{ target_version }} compliant={{ compliant }} is_latest={{ is_latest }}
+      status={{ version_status }}
 
 - name: Upgrade F5 (guarded)
   when:
