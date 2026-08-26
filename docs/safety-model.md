@@ -10,7 +10,7 @@ A device is upgraded only when **all three** are true at once (computed in the
 `preflight` role as `apply_cleared`):
 
 1. **Explicit intent** — `apply_updates=true` passed at run time
-   (`-e apply_updates=true` or the Semaphore survey field). Default is `false`.
+   (`-e apply_updates=true` or the AAP survey field). Default is `false`.
 2. **Maintenance window** — the run is inside the configured change window
    (`roles/preflight/defaults/main.yml`: `maint_days`, `maint_start_hour`,
    `maint_end_hour`). Outside the window, apply is refused.

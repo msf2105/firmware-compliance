@@ -32,7 +32,7 @@ at run time from **Delinea/Thycotic Secret Server**, and wraps every change in a
 - [docs/runbook.md](docs/runbook.md) — operating procedures: audit, remediate, roll back
 - [docs/secret-server.md](docs/secret-server.md) — credential flow via Secret Server
 - [docs/servicenow.md](docs/servicenow.md) — change-record integration
-- [docs/semaphore.md](docs/semaphore.md) — running it from Semaphore UI
+- [docs/aap.md](docs/aap.md) — running it from Ansible Automation Platform
 - [docs/platform-notes.md](docs/platform-notes.md) — per-platform quirks and caveats
 
 ## Reference implementation
@@ -43,7 +43,7 @@ See [workflow/README.md](workflow/README.md) for the quick-start.
 ## Status
 
 Structurally validated (syntax, inventory graph, task graph) and exercised
-end-to-end through Semaphore against the real role/collection/lookup stack — the
+end-to-end through Ansible Automation Platform against the real role/collection/lookup stack — the
 only step that requires live infrastructure is the Secret Server / ServiceNow
 connection and the device sessions themselves. Ships with **sample hosts and
 example golden versions** that must be replaced with your real environment

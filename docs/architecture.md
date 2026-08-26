@@ -49,8 +49,8 @@ drift report without touching anything.
    and the global toggles (`apply_updates`, `require_change_ticket`,
    `reboot_after_upgrade`).
 3. **Secrets** for Secret Server and ServiceNow arrive as environment variables
-   (`TSS_*`, `SNOW_*`) — injected by Semaphore's environment or exported in the
-   shell. Nothing sensitive lives in the repo.
+   (`TSS_*`, `SNOW_*`) — injected by AAP's job template environment or exported
+   in the shell. Nothing sensitive lives in the repo.
 
 ## Design principles
 

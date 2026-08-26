@@ -33,5 +33,5 @@ collections:
   - name: ansible.utils
     version: ">=6.0.3"
 # NOTE: Secret Server access uses the community.general.tss lookup, which
-# requires the python-tss-sdk on the controller / Semaphore runner:
+# requires the python-tss-sdk on the controller / AAP execution environment:
 #   pip install python-tss-sdk
