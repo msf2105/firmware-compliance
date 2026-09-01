@@ -68,6 +68,7 @@
     provider: "{{ _f5_provider }}"
     gather_subset: [system-info]
   register: _f5_info
+  no_log: true
 
 - name: Determine F5 running version
   ansible.builtin.set_fact:
@@ -110,11 +111,13 @@
         provider: "{{ _f5_provider }}"
         src: "pre-upgrade-{{ ansible_date_time.iso8601_basic_short | default('run') }}.ucs"
         dest: "{{ playbook_dir }}/../backups/{{ inventory_hostname }}/pre-upgrade-{{ ansible_date_time.iso8601_basic_short | default('run') }}.ucs"
+      no_log: true
 
     - name: Upload golden BIG-IP image
       f5networks.f5_modules.bigip_software_image:
         provider: "{{ _f5_provider }}"
         image: "{{ playbook_dir }}/../images/{{ golden_versions.f5.image_file }}"
+      no_log: true
 
     - name: Install image to inactive volume
       f5networks.f5_modules.bigip_software_install:
@@ -122,6 +125,7 @@
         image: "{{ golden_versions.f5.image_file }}"
         state: "{{ 'activated' if reboot_after_upgrade | bool else 'installed' }}"
       register: _f5_install
+      no_log: true
 
     - name: Record upgrade action
       ansible.builtin.set_fact:

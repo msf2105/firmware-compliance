@@ -32,6 +32,7 @@
       register: _snow_cr
       delegate_to: localhost
       run_once: true
+      no_log: true
 
     - name: Register change identifiers for downstream tasks
       ansible.builtin.set_fact:
@@ -79,6 +80,7 @@
     other:
       work_notes: "{{ snow_note }}"
   delegate_to: localhost
+  no_log: true
 
 - name: Close change request
   when: snow_action == 'close'
@@ -93,3 +95,4 @@
     close_notes: "{{ snow_close_notes | default('Firmware compliance run complete.') }}"
   delegate_to: localhost
   run_once: true
+  no_log: true

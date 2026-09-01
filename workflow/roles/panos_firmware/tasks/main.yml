@@ -34,6 +34,7 @@
     provider: "{{ _pan_provider }}"
     gather_subset: [system]
   register: _pan_facts
+  no_log: true
 
 - name: Determine PAN-OS running version
   ansible.builtin.set_fact:
@@ -96,6 +97,7 @@
         provider: "{{ _pan_provider }}"
         category: configuration
         filename: "{{ playbook_dir }}/../backups/{{ inventory_hostname }}/pre-upgrade-{{ ansible_date_time.iso8601_basic_short | default('run') }}.xml"
+      no_log: true
 
     - name: Download + install target PAN-OS and reboot
       paloaltonetworks.panos.panos_software:
@@ -105,6 +107,7 @@
         install: true
         restart: "{{ reboot_after_upgrade | bool }}"
       register: _pan_sw
+      no_log: true
 
     - name: Record upgrade action
       ansible.builtin.set_fact:
