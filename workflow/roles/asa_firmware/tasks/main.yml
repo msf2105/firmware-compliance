@@ -53,7 +53,25 @@
     ansible_become: true
     ansible_become_method: enable
     ansible_become_password: "{{ dev_enable | default(dev_password) }}"
+    _asa_target_image_path: "{{ golden_versions.asa.image_disk }}/{{ golden_versions.asa.image_file }}"
   block:
+    - name: Verify ASA golden image is present
+      cisco.asa.asa_command:
+        commands:
+          - "dir {{ _asa_target_image_path }}"
+      register: _asa_image_check
+      changed_when: false
+
+    - name: Fail when ASA golden image is missing
+      ansible.builtin.assert:
+        that:
+          - _asa_image_check.stdout is defined
+          - _asa_image_check.stdout | length > 0
+          - golden_versions.asa.image_file in _asa_image_check.stdout[0]
+          - _asa_image_check.stdout[0] is not search('(?i)(no such|error|not found|invalid)')
+        fail_msg: "Refusing to change boot system: target ASA image {{ _asa_target_image_path }} is not present on {{ inventory_hostname }}."
+        quiet: true
+
     - name: Backup running config before change
       cisco.asa.asa_config:
         backup: true
@@ -64,7 +82,7 @@
     - name: Set boot image to golden
       cisco.asa.asa_config:
         lines:
-          - "boot system {{ golden_versions.asa.image_disk }}/{{ golden_versions.asa.image_file }}"
+          - "boot system {{ _asa_target_image_path }}"
         save_when: modified
 
     - name: Reload to activate (only when reboot_after_upgrade)

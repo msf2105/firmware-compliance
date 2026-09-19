@@ -97,15 +97,15 @@
         category: configuration
         filename: "{{ playbook_dir }}/../backups/{{ inventory_hostname }}/pre-upgrade-{{ ansible_date_time.iso8601_basic_short | default('run') }}.xml"
 
-    - name: Download + install target PAN-OS and reboot
+    - name: Download target PAN-OS and optionally install/reboot
       paloaltonetworks.panos.panos_software:
         provider: "{{ _pan_provider }}"
         version: "{{ golden_versions.panos.version }}"
         download: true
-        install: true
+        install: "{{ reboot_after_upgrade | bool }}"
         restart: "{{ reboot_after_upgrade | bool }}"
       register: _pan_sw
 
     - name: Record upgrade action
       ansible.builtin.set_fact:
-        upgrade_action: "panos_software -> {{ target_version }} download+install{{ ' + restart' if reboot_after_upgrade | bool else ' (restart deferred)' }}"
+        upgrade_action: "panos_software -> {{ target_version }} download{{ ' + install + restart' if reboot_after_upgrade | bool else ' (install/restart deferred)' }}"
