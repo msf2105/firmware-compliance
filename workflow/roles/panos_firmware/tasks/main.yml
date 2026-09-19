@@ -91,11 +91,15 @@
     - not (compliant | bool)
     - apply_cleared | bool
   block:
+    - name: Stamp this PAN-OS backup
+      ansible.builtin.set_fact:
+        _backup_timestamp: "{{ lookup('pipe', 'date -u +%Y%m%dT%H%M%S%NZ') }}"
+
     - name: Export/backup current config
       paloaltonetworks.panos.panos_export:
         provider: "{{ _pan_provider }}"
         category: configuration
-        filename: "{{ playbook_dir }}/../backups/{{ inventory_hostname }}/pre-upgrade-{{ ansible_date_time.iso8601_basic_short | default('run') }}.xml"
+        filename: "{{ playbook_dir }}/../backups/{{ inventory_hostname }}/pre-upgrade-{{ _backup_timestamp }}.xml"
 
     - name: Download + install target PAN-OS and reboot
       paloaltonetworks.panos.panos_software:

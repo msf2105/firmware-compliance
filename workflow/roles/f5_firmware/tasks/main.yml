@@ -105,11 +105,15 @@
     - not (compliant | bool)
     - apply_cleared | bool
   block:
+    - name: Stamp this F5 backup
+      ansible.builtin.set_fact:
+        _backup_timestamp: "{{ lookup('pipe', 'date -u +%Y%m%dT%H%M%S%NZ') }}"
+
     - name: Save/backup current config (UCS archive)
       f5networks.f5_modules.bigip_ucs_fetch:
         provider: "{{ _f5_provider }}"
-        src: "pre-upgrade-{{ ansible_date_time.iso8601_basic_short | default('run') }}.ucs"
-        dest: "{{ playbook_dir }}/../backups/{{ inventory_hostname }}/pre-upgrade-{{ ansible_date_time.iso8601_basic_short | default('run') }}.ucs"
+        src: "pre-upgrade-{{ _backup_timestamp }}.ucs"
+        dest: "{{ playbook_dir }}/../backups/{{ inventory_hostname }}/pre-upgrade-{{ _backup_timestamp }}.ucs"
 
     - name: Upload golden BIG-IP image
       f5networks.f5_modules.bigip_software_image:
