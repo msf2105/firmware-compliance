@@ -22,11 +22,8 @@
   ignore_errors: true
   no_log: true
 
-- name: Determine Catalyst Center golden-image presence
-  ansible.builtin.set_fact:
-    target_version: "{{ golden_versions.dnac.version }}"
-    running_version: "{{ (_catc_images.response | default([]) | length) | ternary('golden image imported', 'golden image MISSING') }}"
-    compliant: "{{ (_catc_images.response | default([]) | length) > 0 }}"
+- name: Evaluate Catalyst Center image query result
+  ansible.builtin.import_tasks: image_query_state.yml
 
 - name: Evaluate version compliance (smart comparison via firmware_check.py)
   ansible.builtin.command:

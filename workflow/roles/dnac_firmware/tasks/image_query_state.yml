@@ -1,0 +1,21 @@
+- name: Determine Catalyst Center image query status
+  ansible.builtin.set_fact:
+    _catc_image_query_failed: "{{ _catc_images is failed }}"
+
+- name: Determine Catalyst Center golden-image presence
+  ansible.builtin.set_fact:
+    target_version: "{{ golden_versions.dnac.version }}"
+    running_version: >-
+      {{ 'golden image query failed'
+         if (_catc_image_query_failed | bool)
+         else ((_catc_images.response | default([]) | length) | ternary('golden image imported', 'golden image MISSING')) }}
+    compliant: "{{ (not (_catc_image_query_failed | bool)) and ((_catc_images.response | default([]) | length) > 0) }}"
+
+- name: Fail closed when Catalyst Center image query fails
+  ansible.builtin.fail:
+    msg: >-
+      Refusing to import Catalyst Center image {{ golden_versions.dnac.version }}
+      because the existing image lookup failed; retry after the API query succeeds.
+  when:
+    - apply_cleared | bool
+    - _catc_image_query_failed | bool
