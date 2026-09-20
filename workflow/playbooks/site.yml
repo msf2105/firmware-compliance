@@ -116,6 +116,14 @@
       ansible.builtin.include_role:
         name: preflight
 
+    - name: Ensure per-host backup directory exists before applying
+      when: apply_cleared | bool
+      ansible.builtin.file:
+        path: "{{ playbook_dir }}/../backups/{{ inventory_hostname }}"
+        state: directory
+        mode: "0700"
+      delegate_to: localhost
+
     - name: Dispatch platform firmware role by group membership
       ansible.builtin.include_role:
         name: "{{ item }}_firmware"
