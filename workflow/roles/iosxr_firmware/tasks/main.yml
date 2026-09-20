@@ -69,6 +69,12 @@
           - command: "install activate {{ golden_versions.iosxr.version }} noprompt"
       when: reboot_after_upgrade | bool
 
+    - name: install commit activated version
+      cisco.iosxr.iosxr_command:
+        commands:
+          - command: "install commit"
+      when: reboot_after_upgrade | bool
+
     - name: Record upgrade action
       ansible.builtin.set_fact:
-        upgrade_action: "install add {{ target_version }}{{ ' + activate' if reboot_after_upgrade | bool else ' (activate deferred)' }}"
+        upgrade_action: "install add {{ target_version }}{{ ' + activate + commit' if reboot_after_upgrade | bool else ' (activate deferred)' }}"
