@@ -61,10 +61,23 @@
           dir_path: "{{ playbook_dir }}/../backups/{{ inventory_hostname }}"
           filename: "pre-upgrade-{{ ansible_date_time.iso8601_basic_short | default('run') }}.cfg"
 
+    - name: Read configured ASA boot system entries
+      cisco.asa.asa_command:
+        commands:
+          - "show running-config boot system"
+      register: _asa_boot_config
+      changed_when: false
+
     - name: Set boot image to golden
       cisco.asa.asa_config:
-        lines:
-          - "boot system {{ golden_versions.asa.image_disk }}/{{ golden_versions.asa.image_file }}"
+        lines: >-
+          {{
+            (_asa_boot_config.stdout_lines[0] | default([])
+              | select('match', '^boot system ')
+              | map('regex_replace', '^', 'no ')
+              | list)
+            + ['boot system ' ~ golden_versions.asa.image_disk ~ '/' ~ golden_versions.asa.image_file]
+          }}
         save_when: modified
 
     - name: Reload to activate (only when reboot_after_upgrade)
