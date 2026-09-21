@@ -9,8 +9,8 @@
 # Uses the community.general.tss lookup (python-tss-sdk). Auth to Secret
 # Server itself uses env vars so nothing lands in the repo:
 #   TSS_BASE_URL, TSS_USERNAME, TSS_PASSWORD   (or TSS_TOKEN for a token)
-# The lookup ALSO reads these env vars natively, but we pass base_url
-# explicitly from inventory so the SoT stays visible.
+# TSS_BASE_URL from the runtime environment wins over inventory so Semaphore
+# credentials can be rotated without editing sample host data.
 # =====================================================================
 
 - name: Assert this host has a secret_id
@@ -21,20 +21,58 @@
     fail_msg: "Host {{ inventory_hostname }} is missing 'secret_id' — cannot fetch credentials."
   delegate_to: localhost
 
-- name: Fetch device secret from Secret Server
+- name: Build Secret Server lookup parameters
+  ansible.builtin.set_fact:
+    _tss_effective_base_url: "{{ lookup('env', 'TSS_BASE_URL') | default(tss_base_url | default(''), true) }}"
+    _tss_token: "{{ lookup('env', 'TSS_TOKEN') | default('', true) }}"
+    _tss_username: "{{ lookup('env', 'TSS_USERNAME') | default('', true) }}"
+    _tss_password: "{{ lookup('env', 'TSS_PASSWORD') | default('', true) }}"
+  delegate_to: localhost
+  no_log: true
+
+- name: Assert Secret Server connection details are available
+  ansible.builtin.assert:
+    that:
+      - _tss_effective_base_url | length > 0
+      - (_tss_token | length > 0) or ((_tss_username | length > 0) and (_tss_password | length > 0))
+    fail_msg: >-
+      Secret Server lookup requires TSS_BASE_URL or tss_base_url plus either
+      TSS_TOKEN or TSS_USERNAME/TSS_PASSWORD.
+  delegate_to: localhost
+  no_log: true
+
+- name: Fetch device secret from Secret Server using token auth
+  when: _tss_token | length > 0
   ansible.builtin.set_fact:
     _tss_secret: >-
       {{ lookup('community.general.tss',
                 secret_id,
-                base_url=tss_base_url,
-                username=lookup('env', 'TSS_USERNAME'),
-                password=lookup('env', 'TSS_PASSWORD')) }}
+                base_url=_tss_effective_base_url,
+                token=_tss_token) }}
+  delegate_to: localhost
+  no_log: true
+
+- name: Fetch device secret from Secret Server using username/password auth
+  when: _tss_token | length == 0
+  ansible.builtin.set_fact:
+    _tss_secret: >-
+      {{ lookup('community.general.tss',
+                secret_id,
+                base_url=_tss_effective_base_url,
+                username=_tss_username,
+                password=_tss_password) }}
+  delegate_to: localhost
+  no_log: true
+
+- name: Normalize Secret Server response
+  ansible.builtin.set_fact:
+    _tss_secret_data: "{{ (_tss_secret | from_json) if (_tss_secret is string) else _tss_secret }}"
   delegate_to: localhost
   no_log: true
 
 - name: Map Secret Server fields into device credential facts
   ansible.builtin.set_fact:
-    dev_username: "{{ _tss_secret['items'] | selectattr('slug', 'equalto', 'username') | map(attribute='itemValue') | first }}"
-    dev_password: "{{ _tss_secret['items'] | selectattr('slug', 'equalto', 'password') | map(attribute='itemValue') | first }}"
-    dev_enable: "{{ (_tss_secret['items'] | selectattr('slug', 'equalto', 'enable-password') | map(attribute='itemValue') | list | first) | default(omit) }}"
+    dev_username: "{{ _tss_secret_data['items'] | selectattr('slug', 'equalto', 'username') | map(attribute='itemValue') | first }}"
+    dev_password: "{{ _tss_secret_data['items'] | selectattr('slug', 'equalto', 'password') | map(attribute='itemValue') | first }}"
+    dev_enable: "{{ (_tss_secret_data['items'] | selectattr('slug', 'equalto', 'enable-password') | map(attribute='itemValue') | list | first) | default(omit) }}"
   no_log: true
