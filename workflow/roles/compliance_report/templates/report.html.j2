@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Firmware Compliance — {{ report_summary.generated }}</title>
+<style>
+  :root { --bg:#f7f7f5; --card:#fff; --ink:#1d1d1b; --muted:#6b6b66; --line:#e3e2dc;
+          --ok:#1f7a4d; --okbg:#e6f4ec; --drift:#a15c00; --driftbg:#fdf1de;
+          --err:#b3261e; --errbg:#fbe9e7; --info:#2d5b9a; --infobg:#e8eef8; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width:1180px; margin:0 auto; padding:28px 20px 60px; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  .sub { color:var(--muted); margin-bottom:22px; }
+  .tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:12px; margin-bottom:22px; }
+  .tile { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }
+  .tile .k { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+  .tile .v { font-size:24px; font-weight:600; margin-top:2px; }
+  .banner { background:var(--infobg); color:var(--info); border-radius:8px; padding:10px 14px; margin-bottom:18px; font-weight:500; }
+  table { width:100%; border-collapse:collapse; background:var(--card); border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  th, td { text-align:left; padding:9px 12px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { background:#efeee9; font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }
+  tr.managed td { background:#fbfbf9; font-size:13px; }
+  tr.managed td:first-child { padding-left:30px; color:var(--muted); }
+  .pill { display:inline-block; padding:1px 9px; border-radius:999px; font-size:12px; font-weight:600; }
+  .OK { background:var(--okbg); color:var(--ok); }
+  .DRIFT { background:var(--driftbg); color:var(--drift); }
+  .AHEAD, .NO-TARGET { background:var(--infobg); color:var(--info); }
+  .ERROR { background:var(--errbg); color:var(--err); }
+  .mono { font-family:ui-monospace, Menlo, Consolas, monospace; font-size:12.5px; }
+  .act { color:var(--muted); font-size:12.5px; max-width:360px; }
+  .scroll { overflow-x:auto; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Firmware Compliance Report</h1>
+  <div class="sub">Generated {{ report_summary.generated }} · mode <b>{{ report_summary.mode | upper }}</b> · change <b>{{ report_summary.change }}</b> · CAB <b>{{ report_summary.cab_approval | upper }}</b></div>
+  {% if report_summary.simulated %}<div class="banner">Includes SIMULATED devices (demo inventory) — no equipment was contacted for those rows.</div>{% endif %}
+  <div class="tiles">
+    <div class="tile"><div class="k">Devices</div><div class="v">{{ report_summary.total }}</div></div>
+    <div class="tile"><div class="k">Compliant</div><div class="v">{{ report_summary.compliant }}</div></div>
+    <div class="tile"><div class="k">Drift / other</div><div class="v">{{ report_summary.total | int - report_summary.compliant | int }}</div></div>
+    <div class="tile"><div class="k">Remediated</div><div class="v">{{ report_summary.applied_hosts | length }}</div></div>
+    <div class="tile"><div class="k">Errors</div><div class="v">{{ report_summary.errors | length }}</div></div>
+  </div>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>Device</th><th>Platform</th><th>Model</th><th>Running</th><th>Golden</th><th>Status</th><th>Action / detail</th></tr></thead>
+    <tbody>
+    {% for r in _rows %}
+      {% set st = 'ERROR' if r.error else ('OK' if r.compliant else r.status) %}
+      <tr>
+        <td><b>{{ r.host }}</b></td><td>{{ r.platform }}</td><td>{{ r.model }}</td>
+        <td class="mono">{{ r.running }}</td><td class="mono">{{ r.target }}</td>
+        <td><span class="pill {{ st }}">{{ st }}</span></td>
+        <td class="act">{{ r.error if r.error else r.action }}</td>
+      </tr>
+      {% for m in r.managed %}
+      {% set mst = 'OK' if m.compliant else m.version_status.split(' ')[0] %}
+      <tr class="managed">
+        <td>↳ {{ m.host }}</td><td>{{ m.platform }}</td><td>{{ m.model }}</td>
+        <td class="mono">{{ m.running }}</td><td class="mono">{{ m.target }}</td>
+        <td><span class="pill {{ mst }}">{{ mst }}</span></td>
+        <td class="act">{{ m.note if m.note | default('') else ('eligible for upgrade' if m.needs_upgrade else ('report only' if 'report only' in m.version_status else '')) }}</td>
+      </tr>
+      {% endfor %}
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</main>
+</body>
+</html>

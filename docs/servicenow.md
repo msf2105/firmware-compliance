@@ -7,15 +7,20 @@ and approval trail. In audit/dry-run mode, no ServiceNow interaction happens.
 
 | Phase | `snow_action` | What it does |
 |-------|--------------|--------------|
-| Play 1 (apply mode) | `open` | Create a Change Request (type standard, state assess). Registers `snow_change_sys_id` and `snow_change_number`. |
-| Play 2 (per device) | `note` | Add a work note with the device's running/target/compliant/action. |
-| Play 3 (apply mode) | `close` | Move the change to closed with an outcome code. |
+| Play 1 run 1 | `open` | Create a **normal** change (state new) then move it to **assess** to start CAB approval. |
+| Play 1 run 2 | `check_approval` / `implement` | Read approval + state of `snow_change_number`; approved and still open → move to implement. |
+| Play 2 (per device) | `note` | Work note with running/golden/status/action (and managed-device counts). |
+| Play 3 | `attach` + `close` | Attach JSON + HTML report; review → closed with close code, or a work note if nothing was applied. |
+
+`snow_mode: mock` (or `SNOW_MODE=mock`) keeps records in `reports/mock_snow/`;
+approve them with `scripts/mock_snow.py approve CHG…`.
 
 ## Requirements
 
 - Ansible collection: `servicenow.itsm`
 - Environment variables:
-  - `SNOW_INSTANCE` — the instance name (e.g. `dev12345`, not the full URL)
+  - `SNOW_INSTANCE` — `dev12345` or a full URL (normalised to https://…service-now.com)
+  - `SNOW_ASSIGNMENT_GROUP` — required by the collection for every state past *new*
   - `SNOW_USERNAME` / `SNOW_PASSWORD` — a service account with change_management
 
 ## Behavior by mode
@@ -30,9 +35,6 @@ and approval trail. In audit/dry-run mode, no ServiceNow interaction happens.
 
 ## Customization
 
-- Change **type / state / assignment group**: edit the `change_request` task in
-  `roles/servicenow/tasks/main.yml` (Play 1 open block).
-- **Close code**: pass `snow_close_code` (default `successful`).
-- To require an **approved** change before applying (not just an open one), add
-  an assertion in `preflight` that queries the change state via
-  `servicenow.itsm.change_request_info` and gates `apply_cleared` on approval.
+All in `roles/servicenow/defaults/main.yml`: `snow_assignment_group`,
+`snow_category`, `snow_risk`, `snow_impact`, `snow_cmdb_ci`. Close code is chosen
+automatically (successful / successful_issues / unsuccessful) from the run's errors.

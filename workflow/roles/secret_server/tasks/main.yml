@@ -1,40 +1,174 @@
 ---
 # =====================================================================
-# secret_server — resolve device credentials from Delinea/Thycotic
-# Secret Server at run time. Sets host-scoped facts:
-#   dev_username, dev_password, and (when present) dev_enable.
-# No secret VALUE is ever written to inventory or disk. Requires each host
-# to define `secret_id` (the Secret Server secret ID for that device).
+# secret_server — resolve device credentials at run time. Sets host facts:
+#   dev_username, dev_password, dev_enable (falls back to dev_password)
 #
-# Uses the community.general.tss lookup (python-tss-sdk). Auth to Secret
-# Server itself uses env vars so nothing lands in the repo:
-#   TSS_BASE_URL, TSS_USERNAME, TSS_PASSWORD   (or TSS_TOKEN for a token)
-# The lookup ALSO reads these env vars natively, but we pass base_url
-# explicitly from inventory so the SoT stays visible.
+# Nothing secret is ever written to inventory or disk, and every task that
+# touches a credential is no_log.
+#
+# credential_source (see defaults/main.yml):
+#   secret_server -> Delinea Secret Server via community.general.tss
+#                    auth from env: TSS_TOKEN  or  TSS_USERNAME + TSS_PASSWORD
+#                    (optional TSS_DOMAIN for AD-backed service accounts)
+#   vault         -> ansible-vault encrypted vault_device_credentials dict
+#   simulate      -> placeholder creds for the demo inventory
 # =====================================================================
 
-- name: Assert this host has a secret_id
+- name: Use placeholder credentials for simulated hosts
+  when: (simulate | default(false) | bool) or credential_source == 'simulate'
+  ansible.builtin.set_fact:
+    dev_username: "simulated"
+    dev_password: "simulated"
+    dev_enable: "simulated"
+    credential_origin: "simulated"
+  no_log: true
+
+- name: Resolve credentials from Delinea Secret Server
+  when:
+    - not (simulate | default(false) | bool)
+    - credential_source == 'secret_server'
+  block:
+    - name: Assert Secret Server prerequisites
+      ansible.builtin.assert:
+        that:
+          - secret_id is defined
+          - secret_id | int > 0
+          - tss_base_url | length > 0
+          - (lookup('env', 'TSS_TOKEN') | length > 0) or
+            (lookup('env', 'TSS_USERNAME') | length > 0 and lookup('env', 'TSS_PASSWORD') | length > 0)
+        fail_msg: >-
+          {{ inventory_hostname }}: needs secret_id on the host, tss_base_url (inventory or
+          TSS_BASE_URL), and TSS_TOKEN or TSS_USERNAME/TSS_PASSWORD in the environment.
+        quiet: true
+      delegate_to: localhost
+
+    - name: Fetch device secret (token auth)
+      when: lookup('env', 'TSS_TOKEN') | length > 0
+      ansible.builtin.set_fact:
+        _tss_secret: >-
+          {{ lookup('community.general.tss', secret_id | int,
+                    base_url=tss_base_url,
+                    token=lookup('env', 'TSS_TOKEN')) }}
+      delegate_to: localhost
+      no_log: true
+
+    - name: Fetch device secret (username/password auth)
+      when: lookup('env', 'TSS_TOKEN') | length == 0
+      ansible.builtin.set_fact:
+        _tss_secret: >-
+          {{ lookup('community.general.tss', secret_id | int,
+                    base_url=tss_base_url,
+                    username=lookup('env', 'TSS_USERNAME'),
+                    password=lookup('env', 'TSS_PASSWORD'),
+                    domain=tss_domain) }}
+      delegate_to: localhost
+      no_log: true
+
+    # NOTE: the previous version used default(omit) for the enable password,
+    # which stored Ansible's omit placeholder string as the enable secret
+    # whenever the field was missing. Empty string + explicit fallback fixes it.
+    - name: Map Secret Server fields into device credential facts
+      ansible.builtin.set_fact:
+        dev_username: "{{ _tss_items | selectattr('slug', 'equalto', tss_field_username) | map(attribute='itemValue') | first | default('') }}"
+        dev_password: "{{ _tss_items | selectattr('slug', 'equalto', tss_field_password) | map(attribute='itemValue') | first | default('') }}"
+        _dev_enable_raw: "{{ _tss_items | selectattr('slug', 'equalto', tss_field_enable) | map(attribute='itemValue') | first | default('') }}"
+        credential_origin: "secret_server:{{ secret_id }}"
+      vars:
+        _tss_items: "{{ _tss_secret['items'] | default([]) }}"
+      no_log: true
+
+- name: Resolve credentials from Bitwarden Secrets Manager (dev — recommended for AWX)
+  when:
+    - not (simulate | default(false) | bool)
+    - credential_source == 'bitwarden_sm'
+  block:
+    - name: Assert Bitwarden Secrets Manager prerequisites
+      ansible.builtin.assert:
+        that:
+          - bws_secret_id is defined and bws_secret_id | length > 0
+          - lookup('env', 'BWS_ACCESS_TOKEN') | length > 0
+        fail_msg: "{{ inventory_hostname }}: needs bws_secret_id on the host and BWS_ACCESS_TOKEN in the environment."
+        quiet: true
+      delegate_to: localhost
+
+    # The secret's VALUE is a small JSON document:
+    #   {"username": "netauto", "password": "...", "enable": "..."}
+    - name: Fetch device secret from Bitwarden Secrets Manager
+      ansible.builtin.set_fact:
+        _bws: "{{ (lookup('community.general.bitwarden_secrets_manager', bws_secret_id).value) | from_json }}"
+      delegate_to: localhost
+      no_log: true
+
+    - name: Map Bitwarden Secrets Manager fields
+      ansible.builtin.set_fact:
+        dev_username: "{{ _bws.username | default('') }}"
+        dev_password: "{{ _bws.password | default('') }}"
+        _dev_enable_raw: "{{ _bws.enable | default('') }}"
+        credential_origin: "bitwarden_sm:{{ bws_secret_id }}"
+      no_log: true
+
+- name: Resolve credentials from Bitwarden Password Manager (bw CLI)
+  when:
+    - not (simulate | default(false) | bool)
+    - credential_source == 'bitwarden'
+  block:
+    - name: Assert Bitwarden prerequisites
+      ansible.builtin.assert:
+        that:
+          - bw_item is defined and bw_item | length > 0
+          - lookup('env', 'BW_SESSION') | length > 0
+        fail_msg: >-
+          {{ inventory_hostname }}: needs bw_item (item name or id) on the host and an unlocked
+          vault (export BW_SESSION=$(bw unlock --raw)).
+        quiet: true
+      delegate_to: localhost
+
+    # Login item: standard username/password, plus an optional custom field
+    # named by bw_field_enable (default "enable") for the enable secret.
+    - name: Fetch device item from Bitwarden
+      ansible.builtin.set_fact:
+        _bw_user: "{{ lookup('community.general.bitwarden', bw_item, search=bw_search, field='username') | first }}"
+        _bw_pass: "{{ lookup('community.general.bitwarden', bw_item, search=bw_search, field='password') | first }}"
+        _bw_enable: "{{ lookup('community.general.bitwarden', bw_item, search=bw_search, field=bw_field_enable, errors='ignore') | default([''], true) | first | default('') }}"
+      delegate_to: localhost
+      no_log: true
+
+    - name: Map Bitwarden fields
+      ansible.builtin.set_fact:
+        dev_username: "{{ _bw_user }}"
+        dev_password: "{{ _bw_pass }}"
+        _dev_enable_raw: "{{ _bw_enable }}"
+        credential_origin: "bitwarden:{{ bw_item }}"
+      no_log: true
+
+- name: Resolve credentials from ansible-vault (lab / break-glass)
+  when:
+    - not (simulate | default(false) | bool)
+    - credential_source == 'vault'
+  ansible.builtin.set_fact:
+    dev_username: "{{ _vc.username | default('') }}"
+    dev_password: "{{ _vc.password | default('') }}"
+    _dev_enable_raw: "{{ _vc.enable | default('') }}"
+    credential_origin: "vault"
+  vars:
+    _vc: "{{ vault_device_credentials[secret_id | default('default') | string] | default(vault_device_credentials['default'] | default({})) }}"
+  no_log: true
+
+- name: Finalise enable secret (fallback to login password)
+  when:
+    - not (simulate | default(false) | bool)
+    - credential_source != 'simulate'
+  ansible.builtin.set_fact:
+    dev_enable: "{{ _dev_enable_raw if (_dev_enable_raw | default('') | length > 0) else dev_password }}"
+  no_log: true
+
+- name: Verify credentials resolved
   ansible.builtin.assert:
     that:
-      - secret_id is defined
-      - secret_id | int > 0
-    fail_msg: "Host {{ inventory_hostname }} is missing 'secret_id' — cannot fetch credentials."
+      - dev_username is defined and dev_username | length > 0
+      - dev_password is defined and dev_password | length > 0
+    fail_msg: >-
+      {{ inventory_hostname }}: credential lookup ({{ credential_source }}) returned no
+      username/password. Check the secret's field slugs (tss_field_*) or the vault entry.
+    success_msg: "{{ inventory_hostname }}: credentials resolved from {{ credential_origin }}"
   delegate_to: localhost
-
-- name: Fetch device secret from Secret Server
-  ansible.builtin.set_fact:
-    _tss_secret: >-
-      {{ lookup('community.general.tss',
-                secret_id,
-                base_url=tss_base_url,
-                username=lookup('env', 'TSS_USERNAME'),
-                password=lookup('env', 'TSS_PASSWORD')) }}
-  delegate_to: localhost
-  no_log: true
-
-- name: Map Secret Server fields into device credential facts
-  ansible.builtin.set_fact:
-    dev_username: "{{ _tss_secret['items'] | selectattr('slug', 'equalto', 'username') | map(attribute='itemValue') | first }}"
-    dev_password: "{{ _tss_secret['items'] | selectattr('slug', 'equalto', 'password') | map(attribute='itemValue') | first }}"
-    dev_enable: "{{ (_tss_secret['items'] | selectattr('slug', 'equalto', 'enable-password') | map(attribute='itemValue') | list | first) | default(omit) }}"
-  no_log: true

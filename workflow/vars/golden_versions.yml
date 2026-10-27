@@ -12,9 +12,14 @@
 
 golden_versions:
   ios:
+    # IOS-XE devices NOT managed by Catalyst Center. Per-model overrides go in
+    # group_vars as ios_golden_override (see roles/ios_firmware/defaults).
     version: "17.09.05"
     image_file: "cat9k_iosxe.17.09.05.SPA.bin"
     image_disk: "flash:"
+    image_server: "http://10.20.0.250/images"   # HTTP/SCP/TFTP source the switch can reach
+    image_md5: ""                 # << EDIT: MD5 from software.cisco.com (blank = skip check)
+    image_size_kb: 0              # optional flash-space pre-check (0 = skip)
     cisco_pid: "C9300-24T"       # Cisco Product ID for Software Suggestion API
   iosxr:
     version: "7.11.2"
@@ -35,9 +40,44 @@ golden_versions:
     switch_version: "16.0(5h)"
     cisco_pid: "APIC-SERVER-L3"
   dnac:
-    # Catalyst Center manages device SWIM images; target the golden tag/version
-    version: "17.09.05"
-    cisco_pid: "CISCO-DNA-APPLIANCE"
+    # Catalyst Center is the upgrade ENGINE for the devices it manages (SWIM).
+    appliance_version: "2.3.7.9"   # Catalyst Center release — audited, never auto-upgraded
+    version: "2.3.7.9"             # kept for firmware_check.py compatibility
+    api_version: "2.3.7.6"         # SDK API version the collection should speak
+    # One entry per device series. `series` is matched as a substring of the
+    # 'series' field in Catalyst Center inventory.
+    device_targets:
+      - series: "Catalyst 9300"
+        version: "17.09.05"
+        image_name: "cat9k_iosxe.17.09.05.SPA.bin"
+        image_url: ""              # blank = image already imported into Catalyst Center
+        device_image_family_name: "Cisco Catalyst 9300 Switch"
+        device_role: ALL
+        site_name: Global
+        cisco_pid: "C9300-48P"
+      - series: "Catalyst 9200"
+        version: "17.09.05"
+        image_name: "cat9k_lite_iosxe.17.09.05.SPA.bin"
+        image_url: ""
+        device_image_family_name: "Cisco Catalyst 9200 Switch"
+        device_role: ALL
+        site_name: Global
+        cisco_pid: "C9200-24P"
+  sdwan:
+    # Catalyst SD-WAN via SD-WAN Manager. Controllers are audited only;
+    # WAN edges are upgraded by SD-WAN Manager (image must be in its repository).
+    manager_version: "20.12.4"     # SD-WAN Manager (vManage)
+    controller_version: "20.12.4"  # Validators (vBond) + Controllers (vSmart)
+    version: "20.12.4"             # kept for firmware_check.py compatibility
+    edge_targets:
+      # `model_match` is a substring of the device-model reported by SD-WAN Manager
+      - model_match: "C8000V"
+        version: "17.12.04"
+      - model_match: "C8300"
+        version: "17.12.04"
+        cisco_pid: "C8300-1N1S-6T"
+      - model_match: "ISR4"
+        version: "17.12.04"
   ise:
     version: "3.3.0.430"
     patch: "3"
@@ -55,7 +95,7 @@ golden_versions:
     image_file: "BIGIP-17.1.1.3-0.0.5.iso"
     # F5 uses device-local iControl REST for latest-version discovery (no cloud API)
 
-# Global switches (overridable at run time with -e)
+# Global switches (overridable at run time with -e or AWX survey)
 apply_updates: false          # DRY-RUN by default. true = actually push firmware.
 require_change_ticket: true   # every apply must be wrapped in a SNOW change record
 require_cab_approval: true    # normal (CAB-reviewed) changes require explicit approval

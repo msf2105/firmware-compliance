@@ -1,0 +1,31 @@
+---
+# servicenow defaults — every value is overridable with -e or group_vars.
+
+# live = real instance via servicenow.itsm   mock = local JSON records under
+# reports/mock_snow/ (offline rehearsal; approve with scripts/mock_snow.py)
+snow_mode: "{{ lookup('env', 'SNOW_MODE') | default('live', true) }}"
+
+# SNOW_INSTANCE may be a short name (dev12345) or a full URL. The
+# servicenow.itsm collection needs the full https:// URL, so normalise it.
+_snow_instance_raw: "{{ lookup('env', 'SNOW_INSTANCE') | default('', true) }}"
+snow_host: >-
+  {{ _snow_instance_raw if _snow_instance_raw is match('^https?://')
+     else ('https://' ~ _snow_instance_raw ~ ('' if '.' in _snow_instance_raw else '.service-now.com')) }}
+snow_instance:
+  host: "{{ snow_host | trim }}"
+  username: "{{ lookup('env', 'SNOW_USERNAME') }}"
+  password: "{{ lookup('env', 'SNOW_PASSWORD') }}"
+
+# Change record fields. assignment_group is REQUIRED by servicenow.itsm for
+# every state past "new" (assess, scheduled, implement, review, closed).
+snow_assignment_group: "{{ lookup('env', 'SNOW_ASSIGNMENT_GROUP') | default('Network', true) }}"
+snow_category: Network
+snow_risk: moderate        # high | moderate | low
+snow_impact: medium        # high | medium | low
+snow_cmdb_ci: ""           # optional CI name to relate the change to
+
+snow_short_description: "Firmware compliance remediation (Ansible)"
+snow_description: "Multi-platform firmware compliance / remediation initiated by Ansible."
+
+# Where mock change records live
+snow_mock_dir: "{{ playbook_dir }}/../reports/mock_snow"

@@ -67,6 +67,7 @@ def evaluate_device(platform: str, running: str, golden: str, source=None) -> di
     is_latest = False
     is_compliant = False
     comparison = "unknown"
+    golden_cmp = None
 
     if source:
         try:
@@ -80,6 +81,7 @@ def evaluate_device(platform: str, running: str, golden: str, source=None) -> di
                 comparison = "ahead"
             cmp_golden = source.version_compare(running, golden)
             is_compliant = (cmp_golden == 0)
+            golden_cmp = cmp_golden
         except Exception:
             # fallback to string compare
             is_latest = (running.strip() == effective_latest.strip())
@@ -89,6 +91,15 @@ def evaluate_device(platform: str, running: str, golden: str, source=None) -> di
         is_latest = (running.strip() == effective_latest.strip())
         is_compliant = (running.strip() == golden.strip())
         comparison = "equal" if is_latest else "behind"
+
+    # What remediation is appropriate relative to the GOLDEN (approved) target.
+    # A device running something newer than golden is never auto-downgraded.
+    if is_compliant:
+        action_needed = "none"
+    elif golden_cmp is not None and golden_cmp > 0:
+        action_needed = "review"      # ahead of golden — flag, never downgrade
+    else:
+        action_needed = "upgrade"
 
     return {
         "platform": platform,
@@ -100,7 +111,8 @@ def evaluate_device(platform: str, running: str, golden: str, source=None) -> di
         "is_compliant": is_compliant,
         "comparison": comparison,
         "status": "OK" if is_latest else "DRIFT",
-        "status_compliant": "OK" if is_compliant else "DRIFT",
+        "status_compliant": "OK" if is_compliant else ("AHEAD" if action_needed == "review" else "DRIFT"),
+        "action_needed": action_needed,
     }
 
 
@@ -134,7 +146,7 @@ def main():
     )
     parser.add_argument(
         "--platform", "-p",
-        help="Platform type (ios, nxos, asa, iosxr, panos, f5, ...)",
+        help="Platform type (ios, nxos, asa, iosxr, dnac, sdwan, panos, f5, ...)",
     )
     parser.add_argument(
         "--running", "-r",
@@ -157,6 +169,16 @@ def main():
         help="Pre-discovered latest version (e.g. from a device-local API query). "
              "Bypasses cloud API discovery — used for PA/F5 where the Ansible role "
              "queries the device directly.",
+    )
+    parser.add_argument(
+        "--golden",
+        help="Override the golden version from golden_versions.yml (used for "
+             "platforms with per-model targets, e.g. SD-WAN edges, Catalyst Center families).",
+    )
+    parser.add_argument(
+        "--exit-zero", action="store_true",
+        help="Always exit 0 when the check itself succeeds (drift is reported in the "
+             "output, not the exit code). Used by the Ansible roles.",
     )
     parser.add_argument(
         "--output", "-o", default="json",
@@ -190,6 +212,8 @@ def main():
                         dev["product_id"] = info["product_id"]
                     if info.get("latest_version"):
                         dev["latest_version"] = info["latest_version"]
+                    if info.get("golden"):
+                        dev["golden"] = info["golden"]
                     devices.append(dev)
         except json.JSONDecodeError as e:
             print(f"ERROR: invalid JSON: {e}", file=sys.stderr)
@@ -209,6 +233,10 @@ def main():
             golden = gv.get("version", "")
         else:
             golden = str(gv)
+        golden = dev.get("golden") or args.golden or golden
+        if not golden:
+            print(f"ERROR: no golden version for platform '{plat}' (host {dev['host']})", file=sys.stderr)
+            sys.exit(1)
 
         # Determine product_id: CLI arg > inventory dict > golden_versions.yml
         product_id = dev.get("product_id") or args.product_id
@@ -240,10 +268,10 @@ def main():
     if args.output == "json":
         print(json.dumps(results, indent=2))
         any_drift = any(r["status"] == "DRIFT" for r in results)
-        sys.exit(2 if any_drift else 0)
+        sys.exit(0 if args.exit_zero else (2 if any_drift else 0))
     elif args.output == "table":
         rc = print_report(results)
-        sys.exit(rc)
+        sys.exit(0 if args.exit_zero else rc)
     elif args.output == "ansible_facts":
         # Emit Ansible set_fact compatible JSON
         facts = {}
@@ -252,7 +280,7 @@ def main():
             facts[f"firmware_check_{h}"] = r
         print(json.dumps(facts, indent=2))
         any_drift = any(r["status"] == "DRIFT" for r in results)
-        sys.exit(2 if any_drift else 0)
+        sys.exit(0 if args.exit_zero else (2 if any_drift else 0))
 
 
 if __name__ == "__main__":

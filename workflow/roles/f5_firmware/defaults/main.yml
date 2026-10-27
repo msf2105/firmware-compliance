@@ -1,0 +1,10 @@
+---
+# f5_firmware defaults
+f5_server_port: 443
+f5_validate_certs: false
+# Local directory on the controller/EE holding BIG-IP ISOs to upload.
+f5_image_dir: "{{ playbook_dir }}/../images"
+# HA safety: never install on the ACTIVE unit of a pair unless explicitly allowed.
+f5_allow_active_upgrade: false
+# Volume to install to when no inactive volume exists yet (BIG-IP creates it).
+f5_default_install_volume: HD1.2

@@ -1,52 +1,86 @@
 ---
-# compliance_report — aggregate per-host results into a report artifact.
-# Runs once at the end (delegated to localhost) using hostvars from every host.
-- name: Build compliance record set
-  ansible.builtin.set_fact:
-    _report: >-
-      {{ groups['all']
-         | difference(['ungrouped'])
-         | map('extract', hostvars)
-         | selectattr('running_version','defined')
-         | map('combine', {'_placeholder': none})
-         | list }}
-  run_once: true
-  delegate_to: localhost
+# =====================================================================
+# compliance_report — aggregate every device (and every device managed by
+# Catalyst Center / SD-WAN Manager) into:
+#   reports/compliance-<ts>.json   machine-readable artifact
+#   reports/compliance-<ts>.html   the page you show in the demo / attach to SNOW
+# and publish `report_summary` for the ServiceNow close logic.
+# =====================================================================
 
-- name: Assemble rows
+- name: Collect per-host rows
   ansible.builtin.set_fact:
     _rows: >-
-      {{ _rows | default([]) + [ {
-          'host': item,
-          'platform': hostvars[item].platform_label | default('?'),
-          'running': hostvars[item].running_version | default('n/a'),
-          'target': hostvars[item].target_version | default('n/a'),
-          'compliant': hostvars[item].compliant | default(false),
-          'is_latest': hostvars[item].is_latest | default('n/a'),
-          'version_status': hostvars[item].version_status | default('n/a'),
-          'action': hostvars[item].upgrade_action | default('') } ] }}
-  loop: "{{ groups['all'] | difference(['ungrouped']) }}"
-  run_once: true
-  delegate_to: localhost
-  when: hostvars[item].running_version is defined
+      {%- set rows = [] -%}
+      {%- for h in groups['all'] | difference(['localhost']) | sort -%}
+      {%-   set hv = hostvars[h] -%}
+      {%-   if hv.running_version is defined or hv.run_error is defined -%}
+      {%-     set _ = rows.append({
+                'host': h, 'platform': hv.platform_label | default('?'),
+                'model': hv._ios_model | default(hv._pan_model | default(hv._f5_model | default(''))),
+                'running': hv.running_version | default('n/a'),
+                'target': hv.target_version | default('n/a'),
+                'latest': hv.latest_version | default('n/a'),
+                'status': hv.version_status | default('n/a'),
+                'compliant': hv.compliant | default(false) | bool,
+                'apply_cleared': hv.apply_cleared | default(false) | bool,
+                'simulated': (hv.simulate | default(false) | bool) or (hv.simulate_apply_only | default(false) | bool),
+                'action': hv.upgrade_action | default('') | trim,
+                'error': (hv.failed_task | default('') ~ ': ' ~ hv.run_error) if hv.run_error is defined else '',
+                'managed': hv.managed_results | default([])}) -%}
+      {%-   endif -%}
+      {%- endfor -%}
+      {{ rows }}
+    _run_ts: "{{ lookup('pipe', 'date +%Y%m%dT%H%M%S') }}"
+    _run_iso: "{{ lookup('pipe', 'date -Iseconds') }}"
+
+- name: Build summary
+  ansible.builtin.set_fact:
+    report_summary:
+      generated: "{{ _run_iso }}"
+      mode: "{{ 'apply' if apply_updates | bool else 'audit' }}"
+      change: "{{ snow_change_number | default('none') }}"
+      cab_approval: "{{ cab_approval_state | default('n/a') }}"
+      total: "{{ (_rows | length) + (_rows | map(attribute='managed') | flatten | length) }}"
+      compliant: "{{ (_rows | selectattr('compliant') | list | length) + (_rows | map(attribute='managed') | flatten | selectattr('compliant') | list | length) }}"
+      errors: "{{ _rows | selectattr('error') | map(attribute='host') | list }}"
+      applied_hosts: >-
+        {{ _rows | selectattr('apply_cleared') | selectattr('action') | rejectattr('action', 'match', 'HELD')
+           | map(attribute='host') | list }}
+      simulated: "{{ _rows | selectattr('simulated') | list | length > 0 }}"
+    report_json_path: "{{ playbook_dir }}/../reports/compliance-{{ _run_ts }}.json"
+    report_html_path: "{{ playbook_dir }}/../reports/compliance-{{ _run_ts }}.html"
+
+- name: Ensure reports directory exists
+  ansible.builtin.file:
+    path: "{{ playbook_dir }}/../reports"
+    state: directory
+    mode: "0755"
+
+- name: Write JSON report
+  ansible.builtin.copy:
+    content: "{{ {'summary': report_summary, 'results': _rows} | to_nice_json }}"
+    dest: "{{ report_json_path }}"
+    mode: "0644"
+
+- name: Write HTML report
+  ansible.builtin.template:
+    src: report.html.j2
+    dest: "{{ report_html_path }}"
+    mode: "0644"
 
 - name: Print compliance table
   ansible.builtin.debug:
-    msg: |
-      ================ FIRMWARE COMPLIANCE REPORT ================
-      Mode: {{ 'APPLY' if apply_updates | bool else 'DRY-RUN' }}   Change: {{ snow_change_number | default('none') }}   CAB: {{ (cab_approval_state | default('n/a')) | upper }}
-      {% for r in _rows | default([]) %}
-      [{{ 'OK ' if r.compliant else 'DRIFT' }}] {{ '%-14s' | format(r.host) }} {{ '%-8s' | format(r.platform) }} run={{ r.running }} -> tgt={{ r.target }} latest={{ r.is_latest }} status={{ r.version_status }} {{ ('| ' + r.action) if r.action else '' }}
+    msg: "{{ _table.split('\n') | map('regex_replace', '\\s+$', '') | select | list }}"
+  vars:
+    _table: |-
+      ===================== FIRMWARE COMPLIANCE REPORT =====================
+      Mode: {{ report_summary.mode | upper }}{{ ' (SIMULATED DEVICES)' if report_summary.simulated else '' }}   Change: {{ report_summary.change }}   CAB: {{ report_summary.cab_approval | upper }}
+      {% for r in _rows %}
+      [{{ '%-5s' | format('OK' if r.compliant else ('ERR' if r.error else r.status)) }}] {{ '%-16s' | format(r.host) }} {{ '%-16s' | format(r.platform) }} {{ r.running }} -> {{ r.target }}{{ ('  | ' ~ r.action) if r.action else '' }}{{ ('  | ' ~ r.error) if r.error else '' }}
+      {% for m in r.managed %}
+          [{{ '%-5s' | format('OK' if m.compliant else m.version_status.split(' ')[0]) }}] {{ '%-16s' | format(m.host) }} {{ '%-12s' | format(m.platform) }} {{ m.running }} -> {{ m.target }}
       {% endfor %}
-      ===========================================================
-      Compliant: {{ _rows | default([]) | selectattr('compliant') | list | length }}/{{ _rows | default([]) | length }}
-  run_once: true
-  delegate_to: localhost
-
-- name: Write JSON report artifact
-  ansible.builtin.copy:
-    content: "{{ {'generated': ansible_date_time.iso8601 | default(lookup('pipe','date -Iseconds')), 'mode': ('apply' if apply_updates | bool else 'dry-run'), 'change': (snow_change_number | default('none')), 'cab_approval': (cab_approval_state | default('n/a')), 'results': (_rows | default([]))} | to_nice_json }}"
-    dest: "{{ playbook_dir }}/../reports/compliance-{{ ansible_date_time.iso8601_basic_short | default('run') }}.json"
-    mode: "0644"
-  run_once: true
-  delegate_to: localhost
+      {% endfor %}
+      ======================================================================
+      Compliant: {{ report_summary.compliant }}/{{ report_summary.total }}   Errors: {{ report_summary.errors | length }}   Applied on: {{ report_summary.applied_hosts | join(', ') if report_summary.applied_hosts else 'none' }}
+      Report: {{ report_html_path | realpath }}

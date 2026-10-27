@@ -1,0 +1,31 @@
+---
+# secret_server defaults — overridable per host/group or with -e.
+
+# Where device credentials come from (one switch, same downstream facts):
+#   secret_server  Delinea/Thycotic Secret Server via community.general.tss  (PROD)
+#   bitwarden_sm   Bitwarden Secrets Manager via bws + BWS_ACCESS_TOKEN       (DEV/AWX)
+#   bitwarden      Bitwarden Password Manager via bw CLI + BW_SESSION         (laptop)
+#   vault          an ansible-vault encrypted vars file (lab / break-glass)
+#   simulate       no lookup at all — used by the demo inventory (simulate: true)
+credential_source: "{{ lookup('env', 'CREDENTIAL_SOURCE') | default('secret_server', true) }}"
+
+# Bitwarden Password Manager options (credential_source: bitwarden)
+bw_search: name            # match bw_item against item 'name' or 'id'
+bw_field_enable: enable    # custom field holding the enable secret
+
+# Secret Server connection. TSS_BASE_URL in the environment wins over the
+# inventory value so AAP credentials can point at a different instance.
+tss_base_url: "{{ lookup('env', 'TSS_BASE_URL') | default('', true) }}"
+tss_domain: "{{ lookup('env', 'TSS_DOMAIN') | default('', true) }}"
+
+# Field slugs on your Secret Server template. Defaults match the stock
+# "Cisco Account (SSH)" / "Generic Network Device" style templates; change
+# these if your template uses different field names.
+tss_field_username: username
+tss_field_password: password
+tss_field_enable: enable-password
+
+# vault mode: dict keyed by secret_id (or "default") ->
+#   { username: ..., password: ..., enable: ... }
+# Define it in an ansible-vault encrypted file, e.g. inventory/group_vars/all/vault.yml
+vault_device_credentials: {}

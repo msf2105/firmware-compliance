@@ -1,95 +1,231 @@
 ---
 # =====================================================================
-# servicenow — ITSM change-record integration. Entry points via the
-# `snow_action` var:
-#   open             -> create a normal (CAB-reviewed) Change Request,
-#                       register snow_change_sys_id/number
-#   check_approval   -> query an existing change's approval field;
-#                       sets cab_approved true/false
-#   note             -> add a work note (per-device compliance/upgrade result)
-#   close            -> move the change to Review/Closed with an outcome
+# servicenow — change-record integration. Entry point via `snow_action`:
+#   open             create a NORMAL change, then move new -> assess so the
+#                    CAB approval flow kicks off. Sets snow_change_sys_id /
+#                    snow_change_number.
+#   check_approval   read approval on an existing change; sets cab_approved,
+#                    cab_approval_state, snow_change_state, snow_change_sys_id
+#   implement        move an approved (scheduled) change to implement
+#   note             add a work note
+#   close            implement -> review -> closed with close_code/notes
+#                    (falls back to a work note if the state model refuses)
 #
-# SNOW auth via env: SNOW_INSTANCE, SNOW_USERNAME, SNOW_PASSWORD.
+# snow_mode=live uses the servicenow.itsm collection (env: SNOW_INSTANCE,
+# SNOW_USERNAME, SNOW_PASSWORD). snow_mode=mock writes JSON records to
+# reports/mock_snow/ so the CAB flow can be rehearsed with no instance.
 # =====================================================================
 
-- name: Open change request
-  when: snow_action == 'open'
-  block:
-    - name: Create ServiceNow normal change request (CAB-reviewed)
-      servicenow.itsm.change_request:
-        instance:
-          host: "{{ lookup('env', 'SNOW_INSTANCE') }}"
-          username: "{{ lookup('env', 'SNOW_USERNAME') }}"
-          password: "{{ lookup('env', 'SNOW_PASSWORD') }}"
-        type: normal
-        state: assess
-        assignment_group: "{{ snow_assignment_group | default(omit) }}"
-        short_description: "Automated firmware compliance run {{ ansible_date_time.iso8601 | default(lookup('pipe','date -Iseconds')) }}"
-        description: >-
-          Multi-platform firmware compliance / remediation initiated by Ansible.
-          apply_updates={{ apply_updates }}. Targets: {{ groups['all'] | difference(['ungrouped']) | join(', ') }}.
-          This change requires CAB review and approval before any firmware is applied.
-      register: _snow_cr
-      delegate_to: localhost
-      run_once: true
-
-    - name: Register change identifiers for downstream tasks
-      ansible.builtin.set_fact:
-        snow_change_sys_id: "{{ _snow_cr.record.sys_id }}"
-        snow_change_number: "{{ _snow_cr.record.number }}"
-      delegate_to: localhost
-      run_once: true
-
-- name: Check CAB approval status of an existing change
-  when: snow_action == 'check_approval'
-  block:
-    - name: Query change request approval state
-      servicenow.itsm.change_request_info:
-        instance:
-          host: "{{ lookup('env', 'SNOW_INSTANCE') }}"
-          username: "{{ lookup('env', 'SNOW_USERNAME') }}"
-          password: "{{ lookup('env', 'SNOW_PASSWORD') }}"
-        number: "{{ snow_change_number }}"
-      register: _snow_cr_info
-      delegate_to: localhost
-
-    - name: Set cab_approved fact based on SNOW approval field
-      ansible.builtin.set_fact:
-        cab_approved: "{{ _snow_cr_info.records[0].approval | default('requested') | trim == 'approved' }}"
-        cab_approval_state: "{{ _snow_cr_info.records[0].approval | default('requested') | trim }}"
-        snow_change_sys_id: "{{ _snow_cr_info.records[0].sys_id | default(omit) }}"
-      delegate_to: localhost
-
-    - name: Announce CAB approval status
-      ansible.builtin.debug:
-        msg: >-
-          CAB approval for {{ snow_change_number }}:
-          {{ cab_approval_state | upper }}
-          {{ '— cleared to proceed' if cab_approved | bool else '— NOT approved, audit only' }}
-      delegate_to: localhost
-
-- name: Add work note to change
-  when: snow_action == 'note'
-  servicenow.itsm.change_request:
-    instance:
-      host: "{{ lookup('env', 'SNOW_INSTANCE') }}"
-      username: "{{ lookup('env', 'SNOW_USERNAME') }}"
-      password: "{{ lookup('env', 'SNOW_PASSWORD') }}"
-    sys_id: "{{ snow_change_sys_id }}"
-    other:
-      work_notes: "{{ snow_note }}"
-  delegate_to: localhost
-
-- name: Close change request
-  when: snow_action == 'close'
-  servicenow.itsm.change_request:
-    instance:
-      host: "{{ lookup('env', 'SNOW_INSTANCE') }}"
-      username: "{{ lookup('env', 'SNOW_USERNAME') }}"
-      password: "{{ lookup('env', 'SNOW_PASSWORD') }}"
-    sys_id: "{{ snow_change_sys_id }}"
-    state: closed
-    close_code: "{{ snow_close_code | default('successful') }}"
-    close_notes: "{{ snow_close_notes | default('Firmware compliance run complete.') }}"
+- name: Validate ServiceNow configuration
+  when: snow_mode == 'live'
+  ansible.builtin.assert:
+    that:
+      - _snow_instance_raw | length > 0
+      - snow_instance.username | length > 0
+      - snow_instance.password | length > 0
+    fail_msg: "Set SNOW_INSTANCE, SNOW_USERNAME and SNOW_PASSWORD (or run with SNOW_MODE=mock)."
+    quiet: true
   delegate_to: localhost
   run_once: true
+
+# ------------------------------------------------------------------ live
+- name: ServiceNow (live)
+  when: snow_mode == 'live'
+  delegate_to: localhost
+  block:
+    - name: Open normal change request
+      when: snow_action == 'open'
+      run_once: true
+      block:
+        - name: Create normal change (state new)
+          servicenow.itsm.change_request:
+            instance: "{{ snow_instance }}"
+            type: normal
+            state: new
+            assignment_group: "{{ snow_assignment_group }}"
+            category: "{{ snow_category }}"
+            risk: "{{ snow_risk }}"
+            impact: "{{ snow_impact }}"
+            short_description: "{{ snow_short_description }}"
+            description: "{{ snow_description }}"
+            other: "{{ {'cmdb_ci': snow_cmdb_ci} if snow_cmdb_ci | length > 0 else omit }}"
+          register: _snow_cr
+
+        - name: Move change to assess (requests CAB approval)
+          servicenow.itsm.change_request:
+            instance: "{{ snow_instance }}"
+            sys_id: "{{ _snow_cr.record.sys_id }}"
+            state: assess
+            assignment_group: "{{ snow_assignment_group }}"
+
+        - name: Register change identifiers
+          ansible.builtin.set_fact:
+            snow_change_sys_id: "{{ _snow_cr.record.sys_id }}"
+            snow_change_number: "{{ _snow_cr.record.number }}"
+            snow_change_state: assess
+            cab_approval_state: requested
+            cab_approved: false
+
+    - name: Check CAB approval
+      when: snow_action == 'check_approval'
+      run_once: true
+      block:
+        - name: Query change request
+          servicenow.itsm.change_request_info:
+            instance: "{{ snow_instance }}"
+            number: "{{ snow_change_number }}"
+          register: _snow_cr_info
+
+        - name: Fail if the change number does not exist
+          ansible.builtin.assert:
+            that: _snow_cr_info.records | length > 0
+            fail_msg: "Change {{ snow_change_number }} was not found in {{ snow_host }}."
+            quiet: true
+
+        - name: Set approval facts
+          ansible.builtin.set_fact:
+            snow_change_sys_id: "{{ _rec.sys_id }}"
+            snow_change_state: "{{ _rec.state | string }}"
+            cab_approval_state: "{{ _rec.approval | default('requested') | string | trim }}"
+            # An approved change that is already closed/canceled must never
+            # authorise another push.
+            cab_approved: >-
+              {{ (_rec.approval | default('') | string | trim) == 'approved'
+                 and (_rec.state | default('') | string | lower) not in ['closed', 'canceled', 'cancelled', 'review', '3', '4', '0'] }}
+          vars:
+            _rec: "{{ _snow_cr_info.records[0] }}"
+
+    - name: Move change to implement
+      when: snow_action == 'implement'
+      run_once: true
+      servicenow.itsm.change_request:
+        instance: "{{ snow_instance }}"
+        sys_id: "{{ snow_change_sys_id }}"
+        state: implement
+        assignment_group: "{{ snow_assignment_group }}"
+      register: _snow_impl
+      failed_when: false
+
+    - name: Add work note
+      when: snow_action == 'note'
+      servicenow.itsm.change_request:
+        instance: "{{ snow_instance }}"
+        sys_id: "{{ snow_change_sys_id }}"
+        other:
+          work_notes: "{{ snow_note }}"
+
+    - name: Attach report artifacts
+      when:
+        - snow_action == 'attach'
+        - snow_attachments | default([]) | length > 0
+      run_once: true
+      servicenow.itsm.change_request:
+        instance: "{{ snow_instance }}"
+        sys_id: "{{ snow_change_sys_id }}"
+        attachments: "{{ snow_attachments }}"
+      failed_when: false
+
+    - name: Close change (review -> closed)
+      when: snow_action == 'close'
+      run_once: true
+      block:
+        - name: Move change to review
+          servicenow.itsm.change_request:
+            instance: "{{ snow_instance }}"
+            sys_id: "{{ snow_change_sys_id }}"
+            state: review
+            assignment_group: "{{ snow_assignment_group }}"
+
+        - name: Move change to closed
+          servicenow.itsm.change_request:
+            instance: "{{ snow_instance }}"
+            sys_id: "{{ snow_change_sys_id }}"
+            state: closed
+            assignment_group: "{{ snow_assignment_group }}"
+            close_code: "{{ snow_close_code | default('successful') }}"
+            close_notes: "{{ snow_close_notes | default('Firmware compliance run complete.') }}"
+      rescue:
+        - name: State model refused auto-close — leave a note for the change owner
+          servicenow.itsm.change_request:
+            instance: "{{ snow_instance }}"
+            sys_id: "{{ snow_change_sys_id }}"
+            other:
+              work_notes: >-
+                Ansible could not move this change to Closed automatically
+                ({{ ansible_failed_result.msg | default('state transition refused') }}).
+                Outcome: {{ snow_close_code | default('successful') }}.
+                {{ snow_close_notes | default('') }} Please close manually.
+
+# ------------------------------------------------------------------ mock
+- name: ServiceNow (mock)
+  when: snow_mode == 'mock'
+  delegate_to: localhost
+  block:
+    - name: Ensure mock change directory exists
+      ansible.builtin.file:
+        path: "{{ snow_mock_dir }}"
+        state: directory
+        mode: "0755"
+      run_once: true
+
+    - name: Open mock change
+      when: snow_action == 'open'
+      run_once: true
+      block:
+        - name: Build mock change record
+          ansible.builtin.set_fact:
+            _mock_cr:
+              number: "CHG{{ '%07d' | format(lookup('pipe', 'date +%s') | int % 10000000) }}"
+              sys_id: "{{ lookup('pipe', 'date +%s%N') | hash('md5') }}"
+              type: normal
+              state: assess
+              approval: requested
+              assignment_group: "{{ snow_assignment_group }}"
+              short_description: "{{ snow_short_description }}"
+              description: "{{ snow_description }}"
+              work_notes: []
+
+        - name: Write mock change record
+          ansible.builtin.copy:
+            content: "{{ _mock_cr | to_nice_json }}"
+            dest: "{{ snow_mock_dir }}/{{ _mock_cr.number }}.json"
+            mode: "0644"
+
+        - name: Register mock change identifiers
+          ansible.builtin.set_fact:
+            snow_change_sys_id: "{{ _mock_cr.sys_id }}"
+            snow_change_number: "{{ _mock_cr.number }}"
+            snow_change_state: assess
+            cab_approval_state: requested
+            cab_approved: false
+
+    - name: Read mock change (all non-open actions)
+      when: snow_action != 'open'
+      ansible.builtin.set_fact:
+        _mock_cr: "{{ lookup('ansible.builtin.file', snow_mock_dir ~ '/' ~ snow_change_number ~ '.json') | from_json }}"
+
+    - name: Set approval facts from mock change
+      when: snow_action == 'check_approval'
+      run_once: true
+      ansible.builtin.set_fact:
+        snow_change_sys_id: "{{ _mock_cr.sys_id }}"
+        snow_change_state: "{{ _mock_cr.state }}"
+        cab_approval_state: "{{ _mock_cr.approval }}"
+        cab_approved: "{{ _mock_cr.approval == 'approved' and _mock_cr.state not in ['closed', 'canceled', 'review'] }}"
+
+    - name: Update mock change
+      when: snow_action in ['implement', 'note', 'close', 'attach']
+      throttle: 1
+      vars:
+        _fresh: "{{ lookup('ansible.builtin.file', snow_mock_dir ~ '/' ~ snow_change_number ~ '.json') | from_json }}"
+        _ts: "{{ lookup('pipe', 'date -Iseconds') }}"
+        _patch: >-
+          {{ {'state': 'implement'} if snow_action == 'implement'
+             else {'work_notes': _fresh.work_notes + [_ts ~ ' ' ~ (snow_note | default('') | trim)]} if snow_action == 'note'
+             else {'state': 'closed', 'close_code': snow_close_code | default('successful'),
+                   'close_notes': snow_close_notes | default('')} if snow_action == 'close'
+             else {'attachments': snow_attachments | default([]) | map(attribute='path') | list} }}
+      ansible.builtin.copy:
+        content: "{{ _fresh | combine(_patch) | to_nice_json }}"
+        dest: "{{ snow_mock_dir }}/{{ snow_change_number }}.json"
+        mode: "0644"

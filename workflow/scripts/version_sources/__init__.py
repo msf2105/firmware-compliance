@@ -8,6 +8,7 @@ from .cisco_nxos import CiscoNXOSVersionSource
 from .cisco_asa import CiscoASAVersionSource
 from .cisco_aci import CiscoACIVersionSource
 from .cisco_dnac import CiscoDNACVersionSource
+from .cisco_sdwan import CiscoSDWANVersionSource
 from .cisco_ise import CiscoISEVersionSource
 from .cisco_ucs import CiscoUCSVersionSource
 from .palo_alto_panos import PaloAltoPANOSVersionSource
@@ -23,6 +24,7 @@ _PLATFORM_REGISTRY: Dict[str, type] = {
     "asa": CiscoASAVersionSource,
     "aci": CiscoACIVersionSource,
     "dnac": CiscoDNACVersionSource,
+    "sdwan": CiscoSDWANVersionSource,
     "ise": CiscoISEVersionSource,
     "ucs": CiscoUCSVersionSource,
     "panos": PaloAltoPANOSVersionSource,

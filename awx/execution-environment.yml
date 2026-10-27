@@ -1,0 +1,42 @@
+---
+# =====================================================================
+# Execution environment for AWX (dev) and AAP (prod).
+#
+#   ./awx/build-ee.sh ghcr.io/msf2105/firmware-compliance-ee:1.0
+#   podman push ghcr.io/msf2105/firmware-compliance-ee:1.0
+#
+# Contains every collection in workflow/requirements.yml, the Python SDKs in
+# awx/requirements.txt, and the Bitwarden Secrets Manager CLI (bws) used by the
+# community.general.bitwarden_secrets_manager lookup. Prod (Secret Server only)
+# can use the same image — bws is simply unused there.
+# =====================================================================
+version: 3
+
+images:
+  base_image:
+    name: quay.io/ansible/awx-ee:24.6.1
+
+dependencies:
+  ansible_core:
+    package_pip: ansible-core>=2.16,<2.19
+  ansible_runner:
+    package_pip: ansible-runner
+  galaxy: collections-requirements.yml   # copied from workflow/requirements.yml by build-ee.sh
+  python: requirements.txt
+  system:
+    - unzip [platform:rpm]
+    - git [platform:rpm]
+
+additional_build_files:
+  - src: requirements.txt
+    dest: configs
+
+additional_build_steps:
+  append_final:
+    # Bitwarden Secrets Manager CLI — pin the version you validated.
+    - ARG BWS_VERSION=1.0.0
+    - >-
+      RUN curl -fsSL -o /tmp/bws.zip
+      https://github.com/bitwarden/sdk-sm/releases/download/bws-v${BWS_VERSION}/bws-x86_64-unknown-linux-gnu-${BWS_VERSION}.zip
+      && unzip -o /tmp/bws.zip -d /usr/local/bin && chmod 0755 /usr/local/bin/bws && rm -f /tmp/bws.zip
+      && bws --version

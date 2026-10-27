@@ -1,0 +1,45 @@
+---
+# =====================================================================
+# version_check — one place where a running version is judged against the
+# golden target (and the vendor's latest, when discoverable). Every platform
+# role calls this instead of shelling out to firmware_check.py itself.
+#
+# Inputs:   vc_platform   ios | dnac | sdwan | panos | f5 | ...
+#           vc_running    running version string
+#           vc_golden     optional per-device golden override
+#           vc_pid        optional Cisco PID (Cisco Support API discovery)
+#           vc_latest     optional latest version discovered on the device
+# Outputs (host facts):
+#   running_version, target_version (= golden), latest_version, compliant,
+#   is_latest, version_status (OK | DRIFT | AHEAD), needs_upgrade,
+#   latest_source
+# =====================================================================
+
+- name: Compare running version against golden / latest
+  ansible.builtin.command:
+    argv: >-
+      {{ ['python3', playbook_dir ~ '/../scripts/firmware_check.py',
+          '--platform', vc_platform,
+          '--running', vc_running | string,
+          '--host', inventory_hostname,
+          '--yaml', playbook_dir ~ '/../vars/golden_versions.yml',
+          '--output', 'ansible_facts', '--exit-zero']
+         + (['--golden', vc_golden | string] if (vc_golden | default('') | string | length > 0) else [])
+         + (['--product-id', vc_pid] if (vc_pid | default('') | length > 0) else [])
+         + (['--latest-version', vc_latest | string] if (vc_latest | default('') | string | length > 0) else []) }}
+  delegate_to: localhost
+  changed_when: false
+  register: _vc_out
+
+- name: Publish compliance facts
+  ansible.builtin.set_fact:
+    running_version: "{{ _vc.running }}"
+    target_version: "{{ _vc.golden }}"
+    latest_version: "{{ _vc.effective_latest }}"
+    compliant: "{{ _vc.is_compliant | bool }}"
+    is_latest: "{{ _vc.is_latest | bool }}"
+    version_status: "{{ _vc.status_compliant }}"
+    needs_upgrade: "{{ _vc.action_needed == 'upgrade' }}"
+    latest_source: "{{ _vc.latest_source }}"
+  vars:
+    _vc: "{{ (_vc_out.stdout | from_json)['firmware_check_' ~ inventory_hostname] }}"

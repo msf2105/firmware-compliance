@@ -1,0 +1,11 @@
+---
+# sdwan_firmware defaults
+sdwan_port: 443
+sdwan_validate_certs: false          # set true once the SD-WAN Manager cert is trusted
+sdwan_install_vpn: 0                 # VPN used by devices to pull the image (vEdgeVPN / vSmartVPN)
+sdwan_poll_retries: 120              # x sdwan_poll_delay seconds = max wait per install action
+sdwan_poll_delay: 30
+sdwan_set_default_after_activate: true
+# Device types whose versions are judged. vmanage/vsmart/vbond are always
+# report-only (controllers are upgraded first, by hand, per Cisco guidance).
+sdwan_device_types: [vmanage, vsmart, vbond, vedge]

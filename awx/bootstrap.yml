@@ -1,0 +1,257 @@
+---
+# =====================================================================
+# bootstrap.yml — configure AWX (dev) or AAP (prod) for firmware-compliance
+# as code: credential types, credentials, project, inventory, EE, three job
+# templates and a weekly audit schedule. Re-runnable (idempotent).
+#
+#   export CONTROLLER_HOST=https://awx.lab.local CONTROLLER_USERNAME=admin CONTROLLER_PASSWORD=...
+#   export CONTROLLER_VERIFY_SSL=false                    # lab only
+#   export BWS_ACCESS_TOKEN=...  SNOW_INSTANCE=dev12345 SNOW_USERNAME=... SNOW_PASSWORD=...
+#   ansible-playbook awx/bootstrap.yml                    # dev (Bitwarden, inventory/dev.yml)
+#   ansible-playbook awx/bootstrap.yml -e fc_env=prod     # prod (Secret Server, inventory/hosts.yml)
+#
+# Secrets are read from YOUR environment at bootstrap time and stored only in
+# AWX's encrypted credential store — never written to the repo.
+# =====================================================================
+- name: Configure AWX / AAP for firmware compliance
+  hosts: localhost
+  gather_facts: false
+  vars:
+    fc_env: dev                                      # dev | prod
+    fc_org: "Network Automation"
+    fc_scm_url: "https://github.com/msf2105/firmware-compliance.git"
+    fc_scm_branch: main
+    fc_ee_image: "ghcr.io/msf2105/firmware-compliance-ee:1.0"
+    fc_inventory_file: "{{ 'workflow/inventory/dev.yml' if fc_env == 'dev' else 'workflow/inventory/hosts.yml' }}"
+    fc_secrets_cred: "{{ 'Bitwarden Secrets Manager - dev' if fc_env == 'dev' else 'Delinea Secret Server - prod' }}"
+    fc_snow_assignment_group: "{{ lookup('env', 'SNOW_ASSIGNMENT_GROUP') | default('Network', true) }}"
+  module_defaults:
+    group/awx.awx.controller:
+      validate_certs: "{{ lookup('env', 'CONTROLLER_VERIFY_SSL') | default('true', true) | bool }}"
+
+  tasks:
+    - name: Organization
+      awx.awx.organization:
+        name: "{{ fc_org }}"
+        state: present
+
+    # ------------------------------------------------ credential types
+    - name: Credential type — Bitwarden Secrets Manager
+      awx.awx.credential_type:
+        name: Bitwarden Secrets Manager
+        kind: cloud
+        inputs:
+          fields:
+            - { id: access_token, type: string, label: Machine account access token, secret: true }
+          required: [access_token]
+        injectors:
+          env:
+            BWS_ACCESS_TOKEN: "{% raw %}{{ access_token }}{% endraw %}"
+            CREDENTIAL_SOURCE: bitwarden_sm
+
+    - name: Credential type — Delinea Secret Server
+      awx.awx.credential_type:
+        name: Delinea Secret Server
+        kind: cloud
+        inputs:
+          fields:
+            - { id: base_url, type: string, label: Base URL (https://host/SecretServer) }
+            - { id: username, type: string, label: Username }
+            - { id: password, type: string, label: Password, secret: true }
+            - { id: domain, type: string, label: Domain (optional) }
+            - { id: token, type: string, label: Token (instead of username/password), secret: true }
+          required: [base_url]
+        injectors:
+          env:
+            TSS_BASE_URL: "{% raw %}{{ base_url }}{% endraw %}"
+            TSS_USERNAME: "{% raw %}{{ username | default('') }}{% endraw %}"
+            TSS_PASSWORD: "{% raw %}{{ password | default('') }}{% endraw %}"
+            TSS_DOMAIN: "{% raw %}{{ domain | default('') }}{% endraw %}"
+            TSS_TOKEN: "{% raw %}{{ token | default('') }}{% endraw %}"
+            CREDENTIAL_SOURCE: secret_server
+
+    - name: Credential type — ServiceNow ITSM
+      awx.awx.credential_type:
+        name: ServiceNow ITSM (firmware compliance)
+        kind: cloud
+        inputs:
+          fields:
+            - { id: instance, type: string, label: Instance (dev12345 or full URL) }
+            - { id: username, type: string, label: Username }
+            - { id: password, type: string, label: Password, secret: true }
+            - { id: assignment_group, type: string, label: Assignment group }
+          required: [instance, username, password, assignment_group]
+        injectors:
+          env:
+            SNOW_INSTANCE: "{% raw %}{{ instance }}{% endraw %}"
+            SNOW_USERNAME: "{% raw %}{{ username }}{% endraw %}"
+            SNOW_PASSWORD: "{% raw %}{{ password }}{% endraw %}"
+            SNOW_ASSIGNMENT_GROUP: "{% raw %}{{ assignment_group }}{% endraw %}"
+            SNOW_MODE: live
+
+    # ------------------------------------------------ credentials
+    - name: Credential — Bitwarden Secrets Manager (dev)
+      when: fc_env == 'dev'
+      awx.awx.credential:
+        name: Bitwarden Secrets Manager - dev
+        organization: "{{ fc_org }}"
+        credential_type: Bitwarden Secrets Manager
+        inputs:
+          access_token: "{{ lookup('env', 'BWS_ACCESS_TOKEN') }}"
+        update_secrets: false        # re-runs don't overwrite a token rotated in the UI
+      no_log: true
+
+    - name: Credential — Delinea Secret Server (prod)
+      when: fc_env == 'prod'
+      awx.awx.credential:
+        name: Delinea Secret Server - prod
+        organization: "{{ fc_org }}"
+        credential_type: Delinea Secret Server
+        inputs:
+          base_url: "{{ lookup('env', 'TSS_BASE_URL') }}"
+          username: "{{ lookup('env', 'TSS_USERNAME') }}"
+          password: "{{ lookup('env', 'TSS_PASSWORD') }}"
+          domain: "{{ lookup('env', 'TSS_DOMAIN') }}"
+        update_secrets: false
+      no_log: true
+
+    - name: Credential — ServiceNow
+      awx.awx.credential:
+        name: "ServiceNow - {{ fc_env }}"
+        organization: "{{ fc_org }}"
+        credential_type: ServiceNow ITSM (firmware compliance)
+        inputs:
+          instance: "{{ lookup('env', 'SNOW_INSTANCE') }}"
+          username: "{{ lookup('env', 'SNOW_USERNAME') }}"
+          password: "{{ lookup('env', 'SNOW_PASSWORD') }}"
+          assignment_group: "{{ fc_snow_assignment_group }}"
+        update_secrets: false
+      no_log: true
+
+    # ------------------------------------------------ EE, project, inventory
+    - name: Execution environment
+      awx.awx.execution_environment:
+        name: firmware-compliance-ee
+        image: "{{ fc_ee_image }}"
+        pull: missing
+        organization: "{{ fc_org }}"
+
+    - name: Project (GitHub)
+      awx.awx.project:
+        name: firmware-compliance
+        organization: "{{ fc_org }}"
+        scm_type: git
+        scm_url: "{{ fc_scm_url }}"
+        scm_branch: "{{ fc_scm_branch }}"
+        scm_update_on_launch: true
+        scm_clean: true
+        default_environment: firmware-compliance-ee
+        wait: true
+
+    - name: Inventory
+      awx.awx.inventory:
+        name: "firmware-compliance-{{ fc_env }}"
+        organization: "{{ fc_org }}"
+
+    - name: Inventory source (file in the project)
+      awx.awx.inventory_source:
+        name: "{{ fc_inventory_file | basename }}"
+        inventory: "firmware-compliance-{{ fc_env }}"
+        source: scm
+        source_project: firmware-compliance
+        source_path: "{{ fc_inventory_file }}"
+        overwrite: true
+        update_on_launch: true
+
+    - name: Demo inventory (simulated devices, always available)
+      awx.awx.inventory:
+        name: firmware-compliance-demo
+        organization: "{{ fc_org }}"
+
+    - name: Demo inventory source
+      awx.awx.inventory_source:
+        name: demo.yml
+        inventory: firmware-compliance-demo
+        source: scm
+        source_project: firmware-compliance
+        source_path: workflow/inventory/demo.yml
+        overwrite: true
+        update_on_launch: true
+
+    # ------------------------------------------------ job templates
+    - name: "Job template — 1 Audit"
+      awx.awx.job_template:
+        name: "Firmware Compliance — 1 Audit"
+        description: "Read-only compliance audit. Touches nothing, opens no change."
+        organization: "{{ fc_org }}"
+        project: firmware-compliance
+        playbook: workflow/playbooks/site.yml
+        inventory: "firmware-compliance-{{ fc_env }}"
+        execution_environment: firmware-compliance-ee
+        credentials: ["{{ fc_secrets_cred }}"]
+        ask_inventory_on_launch: true
+        ask_limit_on_launch: true
+        extra_vars: { apply_updates: false }
+
+    - name: "Job template — 2 Open change for CAB"
+      awx.awx.job_template:
+        name: "Firmware Compliance — 2 Open change (CAB review)"
+        description: "Audits and opens a NORMAL ServiceNow change for CAB. Applies nothing."
+        organization: "{{ fc_org }}"
+        project: firmware-compliance
+        playbook: workflow/playbooks/site.yml
+        inventory: "firmware-compliance-{{ fc_env }}"
+        execution_environment: firmware-compliance-ee
+        credentials: ["{{ fc_secrets_cred }}", "ServiceNow - {{ fc_env }}"]
+        ask_inventory_on_launch: true
+        ask_limit_on_launch: true
+        extra_vars: { apply_updates: true }
+        survey_enabled: true
+        survey_spec:
+          name: Open change
+          description: Scope of the change request
+          spec:
+            - question_name: Activate / reload after install?
+              variable: reboot_after_upgrade
+              type: multiplechoice
+              choices: ["false", "true"]
+              default: "false"
+              required: true
+
+    - name: "Job template — 3 Apply (CAB-approved)"
+      awx.awx.job_template:
+        name: "Firmware Compliance — 3 Apply (CAB-approved change)"
+        description: "Remediates ONLY if the change is CAB-approved and inside the maintenance window."
+        organization: "{{ fc_org }}"
+        project: firmware-compliance
+        playbook: workflow/playbooks/site.yml
+        inventory: "firmware-compliance-{{ fc_env }}"
+        execution_environment: firmware-compliance-ee
+        credentials: ["{{ fc_secrets_cred }}", "ServiceNow - {{ fc_env }}"]
+        ask_inventory_on_launch: true
+        ask_limit_on_launch: true
+        extra_vars: { apply_updates: true }
+        survey_enabled: true
+        survey_spec:
+          name: Apply firmware
+          description: Requires a CAB-approved normal change
+          spec:
+            - question_name: Approved change number (CHG...)
+              variable: snow_change_number
+              type: text
+              min: 10
+              max: 15
+              required: true
+            - question_name: Activate / reload after install?
+              variable: reboot_after_upgrade
+              type: multiplechoice
+              choices: ["false", "true"]
+              default: "false"
+              required: true
+
+    - name: Weekly audit schedule (Mondays 06:41 Central)
+      awx.awx.schedule:
+        name: Weekly firmware audit
+        unified_job_template: "Firmware Compliance — 1 Audit"
+        rrule: "DTSTART;TZID=America/Chicago:20261102T064100 RRULE:FREQ=WEEKLY;BYDAY=MO;INTERVAL=1"
+        enabled: true

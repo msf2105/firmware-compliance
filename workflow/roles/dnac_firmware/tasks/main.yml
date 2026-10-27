@@ -1,78 +1,178 @@
 ---
-# dnac_firmware — Cisco Catalyst Center (DNA Center) SWIM compliance.
-# Now with automatic latest-version determination via firmware_check.py.
-- name: Build Catalyst Center connection params
+# =====================================================================
+# dnac_firmware — Cisco Catalyst Center as the upgrade engine (SWIM).
+#
+# One inventory host = one Catalyst Center cluster. The role:
+#   1. Audits the Catalyst Center release itself (report only — appliance
+#      upgrades stay a manual, Cisco-guided procedure).
+#   2. Pulls Catalyst Center's device inventory and judges every managed
+#      device against golden_versions.dnac.device_targets (matched on series).
+#   3. When cleared to apply: imports the golden image, tags it golden for the
+#      family/role/site, distributes it to non-compliant devices, and
+#      activates (reloads) only when reboot_after_upgrade=true.
+#
+# Per-device results land in `managed_results` and show up as indented rows
+# in the compliance report.
+# =====================================================================
+
+- name: Build Catalyst Center connection
   ansible.builtin.set_fact:
-    _catc:
-      dnac_host: "{{ ansible_host }}"
-      dnac_username: "{{ dev_username }}"
-      dnac_password: "{{ dev_password }}"
-      dnac_verify: false
-      dnac_debug: false
+    platform_label: catalyst_center
+    _catc: &catc_conn
+      catalystcenter_host: "{{ ansible_host }}"
+      catalystcenter_port: "{{ catalystcenter_port }}"
+      catalystcenter_username: "{{ dev_username }}"
+      catalystcenter_password: "{{ dev_password }}"
+      catalystcenter_verify: "{{ catalystcenter_verify }}"
+      catalystcenter_version: "{{ catalystcenter_api_version }}"
   no_log: true
 
-- name: Get list of imported software images
-  cisco.catalystcenter.swim_image_details_info:
-    dnac_host: "{{ ansible_host }}"
-    dnac_username: "{{ dev_username }}"
-    dnac_password: "{{ dev_password }}"
-    dnac_verify: false
-    imageName: "{{ golden_versions.dnac.version }}"
-  register: _catc_images
-  ignore_errors: true
-  no_log: true
-
-- name: Determine Catalyst Center golden-image presence
-  ansible.builtin.set_fact:
-    target_version: "{{ golden_versions.dnac.version }}"
-    running_version: "{{ (_catc_images.response | default([]) | length) | ternary('golden image imported', 'golden image MISSING') }}"
-    compliant: "{{ (_catc_images.response | default([]) | length) > 0 }}"
-
-- name: Evaluate version compliance (smart comparison via firmware_check.py)
-  ansible.builtin.command:
-    cmd: >-
-      python3 {{ playbook_dir }}/../scripts/firmware_check.py
-      --platform dnac --running "{{ running_version }}" --host "{{ inventory_hostname }}"
-      --yaml {{ playbook_dir }}/../vars/golden_versions.yml
-      {{ ('--product-id ' ~ golden_versions.dnac.cisco_pid) if golden_versions.dnac.cisco_pid is defined else '' }}
-      --output ansible_facts
-  delegate_to: localhost
-  changed_when: false
-  register: _dnac_check
-
-- name: Parse compliance result
-  ansible.builtin.set_fact:
-    target_version: "{{ (_dnac_check.stdout | from_json)['firmware_check_' + inventory_hostname].effective_latest }}"
-    compliant: "{{ (_dnac_check.stdout | from_json)['firmware_check_' + inventory_hostname].is_compliant }}"
-    is_latest: "{{ (_dnac_check.stdout | from_json)['firmware_check_' + inventory_hostname].is_latest }}"
-    version_status: "{{ (_dnac_check.stdout | from_json)['firmware_check_' + inventory_hostname].status_compliant }}"
-    platform_label: "dnac"
-
-- name: Report Catalyst Center status
-  ansible.builtin.debug:
-    msg: >
-      CatalystCenter {{ inventory_hostname }} running={{ running_version }}
-      latest={{ target_version }} compliant={{ compliant }} is_latest={{ is_latest }}
-      status={{ version_status }}
-
-- name: Import golden image + tag golden (guarded)
-  when:
-    - not (compliant | bool)
-    - apply_cleared | bool
+# ---------------------------------------------------------------- audit
+- name: Live inventory from Catalyst Center
+  when: not (simulate | default(false) | bool)
   block:
-    - name: Import software image via URL
-      cisco.catalystcenter.swim_image_url_import:
-        dnac_host: "{{ ansible_host }}"
-        dnac_username: "{{ dev_username }}"
-        dnac_password: "{{ dev_password }}"
-        dnac_verify: false
-        payload:
-          - sourceURL: "{{ golden_versions.dnac.image_url | default('') }}"
-            thirdParty: false
-      register: _catc_import
-      when: (golden_versions.dnac.image_url | default('')) | length > 0
+    - name: Read Catalyst Center release
+      cisco.catalystcenter.platform_release_summary_info:
+        catalystcenter_host: "{{ _catc.catalystcenter_host }}"
+        catalystcenter_port: "{{ _catc.catalystcenter_port }}"
+        catalystcenter_username: "{{ _catc.catalystcenter_username }}"
+        catalystcenter_password: "{{ _catc.catalystcenter_password }}"
+        catalystcenter_verify: "{{ _catc.catalystcenter_verify }}"
+        catalystcenter_version: "{{ _catc.catalystcenter_version }}"
+      register: _catc_release
       no_log: true
 
-    - name: Record upgrade action
+    - name: Pull managed device inventory
+      cisco.catalystcenter.network_device_info:
+        catalystcenter_host: "{{ _catc.catalystcenter_host }}"
+        catalystcenter_port: "{{ _catc.catalystcenter_port }}"
+        catalystcenter_username: "{{ _catc.catalystcenter_username }}"
+        catalystcenter_password: "{{ _catc.catalystcenter_password }}"
+        catalystcenter_verify: "{{ _catc.catalystcenter_verify }}"
+        catalystcenter_version: "{{ _catc.catalystcenter_version }}"
+        limit: "{{ catalystcenter_device_limit }}"
+      register: _catc_inv
+      no_log: true
+
+    - name: Normalise live inventory
       ansible.builtin.set_fact:
-        upgrade_action: "Catalyst Center golden image {{ target_version }} import requested (distribute/activate scheduled per device)"
+        _catc_appliance_version: "{{ _catc_release.catalystcenter_response.response.installedVersion | default('unknown') }}"
+        _catc_devices: >-
+          {{ _catc_inv.catalystcenter_response.response | default([])
+             | selectattr('softwareVersion', 'truthy')
+             | list }}
+
+- name: Simulated inventory
+  when: simulate | default(false) | bool
+  ansible.builtin.set_fact:
+    _catc_appliance_version: "{{ simulated_running_version }}"
+    _catc_devices: "{{ simulated_managed_devices | default([]) }}"
+
+- name: Filter inventory to configured families
+  ansible.builtin.set_fact:
+    _catc_devices: >-
+      {{ _catc_devices if (catalystcenter_families | length == 0)
+         else (_catc_devices | selectattr('family', 'in', catalystcenter_families) | list) }}
+
+- name: Match each managed device to its golden target (by series)
+  ansible.builtin.set_fact:
+    _catc_matched: >-
+      {%- set out = [] -%}
+      {%- for d in _catc_devices -%}
+      {%- set t = golden_versions.dnac.device_targets | selectattr('series', 'in', d.series | default('')) | list -%}
+      {%- set _ = out.append({'name': d.hostname, 'ip': d.managementIpAddress, 'series': d.series | default(''),
+                               'platform': 'dnac', 'running': d.softwareVersion,
+                               'golden': (t | first).version if t else '',
+                               'pid': (t | first).cisco_pid | default('') if t else '',
+                               'target_index': golden_versions.dnac.device_targets.index(t | first) if t else -1}) -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: Evaluate the Catalyst Center appliance release
+  ansible.builtin.include_role:
+    name: version_check
+  vars:
+    vc_platform: dnac
+    vc_running: "{{ _catc_appliance_version }}"
+    vc_golden: "{{ golden_versions.dnac.appliance_version }}"
+
+- name: Evaluate managed devices
+  ansible.builtin.include_role:
+    name: version_check
+    tasks_from: batch
+  vars:
+    vc_devices: "{{ _catc_matched | selectattr('golden', 'truthy') | list }}"
+
+- name: Build managed-device result rows
+  ansible.builtin.set_fact:
+    managed_results: >-
+      {%- set rows = [] -%}
+      {%- for d in _catc_matched -%}
+      {%- set r = vc_batch_results | selectattr('host', 'equalto', d.name) | list -%}
+      {%- set _ = rows.append({
+             'host': d.name, 'ip': d.ip, 'platform': 'catc-managed', 'model': d.series,
+             'running': d.running, 'target': d.golden if d.golden else 'no golden defined',
+             'compliant': (r | first).is_compliant if r else false,
+             'version_status': (r | first).status_compliant if r else 'NO-TARGET',
+             'needs_upgrade': ((r | first).action_needed == 'upgrade') if r else false,
+             'target_index': d.target_index, 'action': ''}) -%}
+      {%- endfor -%}
+      {{ rows }}
+
+- name: Summarise Catalyst Center status
+  ansible.builtin.debug:
+    msg: >-
+      Catalyst Center {{ inventory_hostname }} release={{ running_version }} (golden {{ target_version }}, report only).
+      Managed devices: {{ managed_results | selectattr('compliant') | list | length }}/{{ managed_results | length }} compliant,
+      {{ managed_results | selectattr('needs_upgrade') | list | length }} need upgrade,
+      {{ managed_results | selectattr('version_status', 'equalto', 'NO-TARGET') | list | length }} without a golden target.
+
+# ---------------------------------------------------------------- remediate
+- name: SWIM remediation (guarded)
+  when:
+    - apply_cleared | bool
+    - managed_results | selectattr('needs_upgrade') | list | length > 0
+  vars:
+    _targets_to_fix: "{{ managed_results | selectattr('needs_upgrade') | map(attribute='target_index') | unique | list }}"
+  block:
+    - name: Simulated SWIM plan
+      when: (simulate | default(false) | bool) or (simulate_apply_only | default(false) | bool)
+      ansible.builtin.set_fact:
+        upgrade_action: >-
+          SIMULATED SWIM: {% for i in _targets_to_fix %}{% set t = golden_versions.dnac.device_targets[i] %}import+tag golden {{ t.image_name }},
+          distribute{{ '+activate' if reboot_after_upgrade | bool else '' }} to
+          {{ managed_results | selectattr('needs_upgrade') | selectattr('target_index', 'equalto', i) | map(attribute='host') | join(', ') }}; {% endfor %}
+
+    - name: Import, tag golden, distribute (and optionally activate) per target
+      when: not ((simulate | default(false) | bool) or (simulate_apply_only | default(false) | bool))
+      cisco.catalystcenter.swim_workflow_manager:
+        <<: *catc_conn
+        catalystcenter_log: true
+        catalystcenter_log_file_path: "{{ playbook_dir }}/../reports/catalystcenter-swim.log"
+        state: merged
+        config:
+          - import_image_details: "{{ {'type': 'remote', 'url_details': {'payload': [{'source_url': [_t.image_url], 'is_third_party': false}]}} if (_t.image_url | default('') | length > 0) else omit }}"
+            tagging_details:
+              image_name: "{{ _t.image_name }}"
+              device_image_family_name: "{{ _t.device_image_family_name }}"
+              device_role: "{{ _t.device_role | default('ALL') }}"
+              site_name: "{{ _t.site_name | default('Global') }}"
+              tagging: true
+            image_distribution_details:
+              image_name: "{{ _t.image_name }}"
+              device_ip_addresses: "{{ _ips }}"
+            image_activation_details: "{{ {'image_name': _t.image_name, 'device_ip_addresses': _ips, 'schedule_validate': false, 'activate_lower_image_version': false, 'distribute_if_needed': true} if (reboot_after_upgrade | bool) else omit }}"
+      vars:
+        _t: "{{ golden_versions.dnac.device_targets[item] }}"
+        _ips: "{{ managed_results | selectattr('needs_upgrade') | selectattr('target_index', 'equalto', item) | map(attribute='ip') | list }}"
+      loop: "{{ _targets_to_fix }}"
+      register: _catc_swim
+      no_log: true
+
+    - name: Record SWIM action
+      when: not ((simulate | default(false) | bool) or (simulate_apply_only | default(false) | bool))
+      ansible.builtin.set_fact:
+        upgrade_action: >-
+          SWIM {{ 'distribute+activate' if reboot_after_upgrade | bool else 'distribute (activation deferred)' }}
+          for {{ managed_results | selectattr('needs_upgrade') | list | length }} device(s):
+          {{ _catc_swim.results | map(attribute='msg', default='') | select | join(' | ') | truncate(400) }}

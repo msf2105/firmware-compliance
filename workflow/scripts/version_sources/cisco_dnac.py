@@ -32,7 +32,10 @@ class CiscoDNACVersionSource(VendorVersionSource):
         return self._latest
 
     def version_compare(self, a: str, b: str) -> int:
-        return self._cisco_style_compare(a, b)
+        # Devices managed by Catalyst Center are IOS-XE (17.09.05a style),
+        # so reuse the IOS comparator that understands letter suffixes.
+        from .cisco_ios import CiscoIOSVersionSource
+        return CiscoIOSVersionSource().version_compare(a, b)
 
     def normalize(self, v: str) -> str:
         return self._cisco_style_normalize(v)

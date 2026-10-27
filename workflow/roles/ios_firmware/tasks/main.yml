@@ -1,80 +1,191 @@
 ---
-# ios_firmware — Cisco IOS / IOS-XE version check + guarded upgrade.
-# Now with automatic latest-version determination via firmware_check.py.
-- name: Gather IOS facts
-  cisco.ios.ios_facts:
-    gather_subset: [hardware]
-  vars:
+# =====================================================================
+# ios_firmware — Cisco IOS-XE (Catalyst 9k / ISR / CSR) audit + guarded upgrade
+#
+# Audit (always):   show version facts -> install/bundle mode -> version_check
+# Upgrade (only when needs_upgrade AND apply_cleared):
+#   1. back up running-config            5. install-mode: install add (stage)
+#   2. confirm flash space                  + activate/commit only when
+#   3. copy image from image_server            reboot_after_upgrade=true
+#   4. verify MD5 against golden         6. bundle-mode: boot system + reload
+#                                         7. after reload: re-verify version
+# Use this group for IOS-XE devices that are NOT managed by Catalyst Center.
+# Devices under Catalyst Center are upgraded via SWIM (dnac_firmware role).
+# =====================================================================
+
+- name: Resolve golden target for this device
+  ansible.builtin.set_fact:
+    _golden: "{{ golden_versions.ios | combine(ios_golden_override) }}"
+    platform_label: ios
+
+- name: Live device facts
+  when: not (simulate | default(false) | bool)
+  vars: &ios_conn
     ansible_user: "{{ dev_username }}"
     ansible_password: "{{ dev_password }}"
     ansible_become: true
     ansible_become_method: enable
-    ansible_become_password: "{{ dev_enable | default(dev_password) }}"
-  register: _ios_facts
-
-- name: Determine IOS running version
-  ansible.builtin.set_fact:
-    running_version: "{{ ansible_net_version | default(_ios_facts.ansible_facts.ansible_net_version) }}"
-
-- name: Evaluate version compliance (smart comparison via firmware_check.py)
-  ansible.builtin.command:
-    cmd: >-
-      python3 {{ playbook_dir }}/../scripts/firmware_check.py
-      --platform ios --running "{{ running_version }}" --host "{{ inventory_hostname }}"
-      --yaml {{ playbook_dir }}/../vars/golden_versions.yml
-      {{ ('--product-id ' ~ golden_versions.ios.cisco_pid) if golden_versions.ios.cisco_pid is defined else '' }}
-      --output ansible_facts
-  delegate_to: localhost
-  changed_when: false
-  register: _ios_check
-
-- name: Parse compliance result
-  ansible.builtin.set_fact:
-    target_version: "{{ (_ios_check.stdout | from_json)['firmware_check_' + inventory_hostname].effective_latest }}"
-    compliant: "{{ (_ios_check.stdout | from_json)['firmware_check_' + inventory_hostname].is_compliant }}"
-    is_latest: "{{ (_ios_check.stdout | from_json)['firmware_check_' + inventory_hostname].is_latest }}"
-    version_status: "{{ (_ios_check.stdout | from_json)['firmware_check_' + inventory_hostname].status_compliant }}"
-    platform_label: "ios"
-
-- name: Report IOS status
-  ansible.builtin.debug:
-    msg: >
-      IOS {{ inventory_hostname }} running={{ running_version }}
-      latest={{ target_version }} compliant={{ compliant }} is_latest={{ is_latest }}
-      status={{ version_status }}
-
-- name: Upgrade IOS (guarded)
-  when:
-    - not (compliant | bool)
-    - apply_cleared | bool
-  vars:
-    ansible_user: "{{ dev_username }}"
-    ansible_password: "{{ dev_password }}"
-    ansible_become: true
-    ansible_become_method: enable
-    ansible_become_password: "{{ dev_enable | default(dev_password) }}"
+    ansible_become_password: "{{ dev_enable }}"
   block:
-    - name: Backup running config before change
-      cisco.ios.ios_config:
-        backup: true
-        backup_options:
-          dir_path: "{{ playbook_dir }}/../backups/{{ inventory_hostname }}"
-          filename: "pre-upgrade-{{ ansible_date_time.iso8601_basic_short | default('run') }}.cfg"
+    - name: Gather IOS-XE facts
+      cisco.ios.ios_facts:
+        gather_subset: [hardware]
 
-    - name: Set boot system to golden image
-      cisco.ios.ios_config:
-        lines:
-          - "boot system {{ golden_versions.ios.image_disk }}{{ golden_versions.ios.image_file }}"
-        save_when: modified
-
-    - name: Reload to activate (only when reboot_after_upgrade)
+    - name: Read boot mode (INSTALL vs BUNDLE)
       cisco.ios.ios_command:
-        commands:
-          - command: "reload in 1 reason firmware upgrade {{ target_version }}"
-            prompt: ['\[confirm\]', '\[yes/no\]']
-            answer: ['y', 'yes']
-      when: reboot_after_upgrade | bool
+        commands: ["show version"]
+      register: _ios_showver
 
-    - name: Record upgrade action
+    - name: Record live facts
       ansible.builtin.set_fact:
-        upgrade_action: "boot set to {{ target_version }}{{ ' + reload scheduled' if reboot_after_upgrade | bool else ' (reload deferred)' }}"
+        _ios_running: "{{ ansible_net_version }}"
+        _ios_model: "{{ ansible_net_model | default('unknown') }}"
+        _ios_mode: "{{ 'INSTALL' if 'INSTALL' in _ios_showver.stdout[0] else ('BUNDLE' if 'BUNDLE' in _ios_showver.stdout[0] else 'UNKNOWN') }}"
+        _ios_free_kb: "{{ ((ansible_net_filesystems_info | default({}))[_golden.image_disk | default('flash:')] | default({})).spacefree_kb | default(0) }}"
+
+- name: Simulated device facts
+  when: simulate | default(false) | bool
+  ansible.builtin.set_fact:
+    _ios_running: "{{ simulated_running_version }}"
+    _ios_model: "{{ simulated_model | default('C9300-48P') }}"
+    _ios_mode: "INSTALL"
+    _ios_free_kb: 4000000
+
+- name: Evaluate compliance
+  ansible.builtin.include_role:
+    name: version_check
+  vars:
+    vc_platform: ios
+    vc_running: "{{ _ios_running }}"
+    vc_golden: "{{ _golden.version }}"
+    vc_pid: "{{ _golden.cisco_pid | default('') }}"
+
+- name: Report IOS-XE status
+  ansible.builtin.debug:
+    msg: >-
+      IOS-XE {{ inventory_hostname }} model={{ _ios_model }} mode={{ _ios_mode }}
+      running={{ running_version }} golden={{ target_version }} latest={{ latest_version }}
+      status={{ version_status }}{{ ' (ahead of golden - not downgrading)' if version_status == 'AHEAD' else '' }}
+
+- name: Upgrade IOS-XE (guarded)
+  when:
+    - needs_upgrade | bool
+    - apply_cleared | bool
+  block:
+    - name: Simulated upgrade plan
+      when: (simulate | default(false) | bool) or (simulate_apply_only | default(false) | bool)
+      ansible.builtin.set_fact:
+        upgrade_action: >-
+          SIMULATED: backup config, copy {{ _golden.image_file }} to {{ _golden.image_disk | default('flash:') }},
+          verify MD5, install add file{{ ' activate commit (reload)' if reboot_after_upgrade | bool else ' (staged, activation deferred)' }}
+
+    - name: Live upgrade
+      when: not ((simulate | default(false) | bool) or (simulate_apply_only | default(false) | bool))
+      vars: *ios_conn
+      block:
+        - name: Create backup directory
+          ansible.builtin.file:
+            path: "{{ playbook_dir }}/../backups/{{ inventory_hostname }}"
+            state: directory
+            mode: "0750"
+          delegate_to: localhost
+
+        - name: Back up running config
+          cisco.ios.ios_config:
+            backup: true
+            backup_options:
+              dir_path: "{{ playbook_dir }}/../backups/{{ inventory_hostname }}"
+              filename: "pre-upgrade-{{ lookup('pipe', 'date +%Y%m%dT%H%M%S') }}.cfg"
+
+        - name: Remove inactive packages to free flash (install mode)
+          when: _ios_mode == 'INSTALL' and ios_cleanup_inactive | bool
+          cisco.ios.ios_command:
+            commands:
+              - command: "install remove inactive"
+                prompt: ['Do you want to remove the above files\? \[y/n\]']
+                answer: ['y']
+          vars:
+            ansible_command_timeout: 600
+
+        - name: Check whether the golden image is already on flash
+          cisco.ios.ios_command:
+            commands: ["dir {{ _golden.image_disk | default('flash:') }}{{ _golden.image_file }}"]
+          register: _ios_dir
+          failed_when: false
+
+        - name: Copy golden image to device
+          when: _golden.image_file not in (_ios_dir.stdout | default(['']) | first)
+          block:
+            - name: Confirm free space for the image
+              when: (_golden.image_size_kb | default(0) | int) > 0
+              ansible.builtin.assert:
+                that: (_ios_free_kb | int) > (_golden.image_size_kb | int * 1.1)
+                fail_msg: >-
+                  {{ inventory_hostname }}: {{ _ios_free_kb }} KB free on {{ _golden.image_disk | default('flash:') }},
+                  image needs {{ _golden.image_size_kb }} KB (+10%). Clean up flash first.
+
+            - name: Copy image from image server
+              cisco.ios.ios_command:
+                commands:
+                  - command: "copy {{ _golden.image_server | regex_replace('/$', '') }}/{{ _golden.image_file }} {{ _golden.image_disk | default('flash:') }}{{ _golden.image_file }}"
+                    prompt: ['Destination filename']
+                    answer: ['']
+              vars:
+                ansible_command_timeout: "{{ ios_copy_timeout }}"
+
+        - name: Verify image MD5
+          when: (_golden.image_md5 | default('')) | length > 0
+          block:
+            - name: Compute MD5 on device
+              cisco.ios.ios_command:
+                commands: ["verify /md5 {{ _golden.image_disk | default('flash:') }}{{ _golden.image_file }}"]
+              register: _ios_md5
+              vars:
+                ansible_command_timeout: 900
+
+            - name: Assert MD5 matches golden
+              ansible.builtin.assert:
+                that: (_golden.image_md5 | lower) in (_ios_md5.stdout[0] | lower)
+                fail_msg: "{{ inventory_hostname }}: MD5 mismatch for {{ _golden.image_file }} — aborting upgrade."
+
+        - name: Install mode — stage package (no reload)
+          when: _ios_mode == 'INSTALL' and not (reboot_after_upgrade | bool)
+          cisco.ios.ios_command:
+            commands: ["install add file {{ _golden.image_disk | default('flash:') }}{{ _golden.image_file }}"]
+          vars:
+            ansible_command_timeout: 1800
+
+        - name: Install mode — add, activate, commit (reloads the device)
+          when: _ios_mode == 'INSTALL' and reboot_after_upgrade | bool
+          cisco.ios.ios_command:
+            commands: ["install add file {{ _golden.image_disk | default('flash:') }}{{ _golden.image_file }} activate commit prompt-level none"]
+          vars:
+            ansible_command_timeout: 1800
+          failed_when: false       # session drops when the switch reloads; verified after reconnect
+
+        - name: Bundle mode — point boot variable at golden image
+          when: _ios_mode != 'INSTALL'
+          cisco.ios.ios_config:
+            lines:
+              - "no boot system"
+              - "boot system {{ _golden.image_disk | default('flash:') }}{{ _golden.image_file }}"
+            save_when: modified
+
+        - name: Bundle mode — reload
+          when: _ios_mode != 'INSTALL' and reboot_after_upgrade | bool
+          cisco.ios.ios_command:
+            commands:
+              - command: "reload reason firmware upgrade {{ target_version }}"
+                prompt: ['\[confirm\]', '\[yes/no\]']
+                answer: ['y', 'no']
+          failed_when: false       # session drops on reload; verified after reconnect
+
+        - name: Wait for device to return and verify version
+          when: reboot_after_upgrade | bool
+          ansible.builtin.include_tasks: post_reload.yml
+
+        - name: Record upgrade action
+          ansible.builtin.set_fact:
+            upgrade_action: >-
+              {{ _ios_mode | lower }}-mode: image {{ _golden.image_file }} verified;
+              {{ ('activated, now ' ~ ansible_net_version) if reboot_after_upgrade | bool else 'staged, activation deferred to next window' }}

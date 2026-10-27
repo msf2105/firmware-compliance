@@ -1,0 +1,11 @@
+---
+# AWX instance — exposed on the VM at http://<vm-ip>:30080
+apiVersion: awx.ansible.com/v1beta1
+kind: AWX
+metadata:
+  name: awx
+  namespace: awx
+spec:
+  service_type: nodeport
+  nodeport_port: 30080
+  postgres_storage_class: local-path   # k3s default storage class
