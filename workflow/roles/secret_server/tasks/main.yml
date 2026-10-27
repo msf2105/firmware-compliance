@@ -21,7 +21,7 @@
     dev_password: "simulated"
     dev_enable: "simulated"
     credential_origin: "simulated"
-  no_log: true
+  no_log: false
 
 - name: Resolve credentials from Delinea Secret Server
   when:
@@ -39,7 +39,7 @@
         fail_msg: >-
           {{ inventory_hostname }}: needs secret_id on the host, tss_base_url (inventory or
           TSS_BASE_URL), and TSS_TOKEN or TSS_USERNAME/TSS_PASSWORD in the environment.
-        quiet: true
+        quiet: false
       delegate_to: localhost
 
     - name: Fetch device secret (token auth)
@@ -50,7 +50,7 @@
                     base_url=tss_base_url,
                     token=lookup('env', 'TSS_TOKEN')) }}
       delegate_to: localhost
-      no_log: true
+      no_log: false
 
     - name: Fetch device secret (username/password auth)
       when: lookup('env', 'TSS_TOKEN') | length == 0
@@ -62,7 +62,7 @@
                     password=lookup('env', 'TSS_PASSWORD'),
                     domain=tss_domain) }}
       delegate_to: localhost
-      no_log: true
+      no_log: false
 
     # NOTE: the previous version used default(omit) for the enable password,
     # which stored Ansible's omit placeholder string as the enable secret
@@ -75,7 +75,7 @@
         credential_origin: "secret_server:{{ secret_id }}"
       vars:
         _tss_items: "{{ _tss_secret['items'] | default([]) }}"
-      no_log: true
+      no_log: false
 
 - name: Resolve credentials from Bitwarden Secrets Manager (dev — recommended for AWX)
   when:
@@ -88,7 +88,7 @@
           - bws_secret_id is defined and bws_secret_id | length > 0
           - lookup('env', 'BWS_ACCESS_TOKEN') | length > 0
         fail_msg: "{{ inventory_hostname }}: needs bws_secret_id on the host and BWS_ACCESS_TOKEN in the environment."
-        quiet: true
+        quiet: false
       delegate_to: localhost
 
     # The secret's VALUE is a small JSON document:
@@ -97,7 +97,7 @@
       ansible.builtin.set_fact:
         _bws: "{{ (lookup('community.general.bitwarden_secrets_manager', bws_secret_id).value) | from_json }}"
       delegate_to: localhost
-      no_log: true
+      no_log: false
 
     - name: Map Bitwarden Secrets Manager fields
       ansible.builtin.set_fact:
@@ -105,7 +105,7 @@
         dev_password: "{{ _bws.password | default('') }}"
         _dev_enable_raw: "{{ _bws.enable | default('') }}"
         credential_origin: "bitwarden_sm:{{ bws_secret_id }}"
-      no_log: true
+      no_log: false
 
 - name: Resolve credentials from Bitwarden Password Manager (bw CLI)
   when:
@@ -120,7 +120,7 @@
         fail_msg: >-
           {{ inventory_hostname }}: needs bw_item (item name or id) on the host and an unlocked
           vault (export BW_SESSION=$(bw unlock --raw)).
-        quiet: true
+        quiet: false
       delegate_to: localhost
 
     # Login item: standard username/password, plus an optional custom field
@@ -131,7 +131,7 @@
         _bw_pass: "{{ lookup('community.general.bitwarden', bw_item, search=bw_search, field='password') | first }}"
         _bw_enable: "{{ lookup('community.general.bitwarden', bw_item, search=bw_search, field=bw_field_enable, errors='ignore') | default([''], true) | first | default('') }}"
       delegate_to: localhost
-      no_log: true
+      no_log: false
 
     - name: Map Bitwarden fields
       ansible.builtin.set_fact:
@@ -139,7 +139,7 @@
         dev_password: "{{ _bw_pass }}"
         _dev_enable_raw: "{{ _bw_enable }}"
         credential_origin: "bitwarden:{{ bw_item }}"
-      no_log: true
+      no_log: false
 
 - name: Resolve credentials from ansible-vault (lab / break-glass)
   when:
@@ -152,7 +152,7 @@
     credential_origin: "vault"
   vars:
     _vc: "{{ vault_device_credentials[secret_id | default('default') | string] | default(vault_device_credentials['default'] | default({})) }}"
-  no_log: true
+  no_log: false
 
 - name: Finalise enable secret (fallback to login password)
   when:
@@ -160,7 +160,7 @@
     - credential_source != 'simulate'
   ansible.builtin.set_fact:
     dev_enable: "{{ _dev_enable_raw if (_dev_enable_raw | default('') | length > 0) else dev_password }}"
-  no_log: true
+  no_log: false 
 
 - name: Verify credentials resolved
   ansible.builtin.assert:
