@@ -20,7 +20,7 @@
       --platform iosxr --running "{{ running_version }}" --host "{{ inventory_hostname }}"
       --yaml {{ playbook_dir }}/../vars/golden_versions.yml
       {{ ('--product-id ' ~ golden_versions.iosxr.cisco_pid) if golden_versions.iosxr.cisco_pid is defined else '' }}
-      --output ansible_facts
+      --output ansible_facts --exit-zero
   delegate_to: localhost
   changed_when: false
   register: _xr_check

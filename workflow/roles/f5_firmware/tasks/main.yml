@@ -1,128 +1,137 @@
 ---
-# f5_firmware — F5 BIG-IP version check + guarded volume install.
-# Discovers the latest available BIG-OS version by querying the device's
-# iControl REST software update endpoint, then passes it to firmware_check.py
-# via --latest-version for comparison against the running version.
+# =====================================================================
+# f5_firmware — F5 BIG-IP audit + guarded, HA-aware volume install.
+#
+# Audit (always):  version, failover state, software volumes, version_check.
+# Upgrade (needs_upgrade AND apply_cleared):
+#   - refuses the ACTIVE unit of an HA pair (f5_allow_active_upgrade)
+#   - saves + downloads a UCS archive to backups/<host>/
+#   - uploads the ISO (if not already on the box) and installs it to an
+#     INACTIVE volume; boots into it only when reboot_after_upgrade=true
+#     (state=activated), otherwise leaves it staged (state=installed).
+# =====================================================================
+
 - name: Build F5 provider
   ansible.builtin.set_fact:
+    platform_label: f5
     _f5_provider:
       server: "{{ ansible_host }}"
+      server_port: "{{ f5_server_port }}"
       user: "{{ dev_username }}"
       password: "{{ dev_password }}"
-      server_port: 443
-      validate_certs: false
+      validate_certs: "{{ f5_validate_certs }}"
   no_log: true
 
-- name: Build F5 REST auth payload
+- name: Live audit
+  when: not (simulate | default(false) | bool)
+  block:
+    - name: Gather BIG-IP system, volume and image info
+      f5networks.f5_modules.bigip_device_info:
+        provider: "{{ _f5_provider }}"
+        gather_subset: [system-info, software-volumes, software-images]
+      register: _f5_info
+
+    - name: Read failover state
+      f5networks.f5_modules.bigip_command:
+        provider: "{{ _f5_provider }}"
+        commands: ["show sys failover"]
+      register: _f5_failover
+      failed_when: false
+
+    - name: Record live facts
+      ansible.builtin.set_fact:
+        _f5_running: "{{ _f5_info.system_info.product_version | default('unknown') }}"
+        _f5_model: "{{ _f5_info.system_info.platform | default(_f5_info.system_info.marketing_name | default('BIG-IP')) }}"
+        _f5_failover: >-
+          {{ ((_f5_failover.stdout | default(['']) | first) | regex_search('Failover\s+(\S+)', '\1') | default(['standalone'], true) | first) | lower }}
+        _f5_volumes: "{{ _f5_info.software_volumes | default([]) }}"
+        _f5_images: "{{ _f5_info.software_images | default([]) | map(attribute='name') | list }}"
+
+- name: Simulated facts
+  when: simulate | default(false) | bool
   ansible.builtin.set_fact:
-    _f5_auth_body: "{{ {'username': dev_username, 'password': dev_password, 'loginProviderName': 'tmos'} | to_json }}"
-  no_log: true
+    _f5_running: "{{ simulated_running_version }}"
+    _f5_model: "{{ simulated_model | default('BIG-IP Virtual Edition') }}"
+    _f5_failover: "{{ simulated_ha_state | default('standalone') }}"
+    _f5_volumes: [{name: HD1.1, active: true}, {name: HD1.2, active: false}]
+    _f5_images: []
 
-- name: Get F5 REST auth token
-  ansible.builtin.uri:
-    url: "https://{{ ansible_host }}:443/mgmt/shared/authn/login"
-    method: POST
-    body: "{{ _f5_auth_body }}"
-    body_format: json
-    validate_certs: false
-    return_content: true
-    timeout: 30
-  register: _f5_auth
-  delegate_to: localhost
-  no_log: true
-  ignore_errors: true
+- name: Evaluate compliance
+  ansible.builtin.include_role:
+    name: version_check
+  vars:
+    vc_platform: f5
+    vc_running: "{{ _f5_running }}"
 
-- name: Extract F5 REST token
+- name: Pick an inactive install volume
   ansible.builtin.set_fact:
-    _f5_token: "{{ _f5_auth.json.token.token if (_f5_auth is success and _f5_auth.json is defined) else '' }}"
-  no_log: true
-  when: _f5_auth is success
-
-- name: Check for available BIG-IP software updates (iControl REST)
-  ansible.builtin.uri:
-    url: "https://{{ ansible_host }}:443/mgmt/tm/sys/software/update"
-    method: GET
-    headers:
-      X-F5-Auth-Token: "{{ _f5_token }}"
-    validate_certs: false
-    return_content: true
-    timeout: 30
-  register: _f5_sw_update
-  delegate_to: localhost
-  no_log: true
-  ignore_errors: true
-
-- name: Parse latest available F5 version from update response
-  ansible.builtin.set_fact:
-    _f5_latest_available: >-
-      {{ _f5_sw_update.json.entries.MCPDeviceOptions.nestedStats.entries.factiveBuildVersion.description
-         if (_f5_sw_update is success and _f5_sw_update.json is defined
-             and _f5_sw_update.json.entries is defined
-             and _f5_sw_update.json.entries.MCPDeviceOptions is defined
-             and _f5_sw_update.json.entries.MCPDeviceOptions.nestedStats.entries.factiveBuildVersion is defined)
-         else '' }}
-  delegate_to: localhost
-
-- name: Gather BIG-IP device info
-  f5networks.f5_modules.bigip_device_info:
-    provider: "{{ _f5_provider }}"
-    gather_subset: [system-info]
-  register: _f5_info
-
-- name: Determine F5 running version
-  ansible.builtin.set_fact:
-    running_version: "{{ _f5_info.system_info.product_version | default('unknown') }}"
-
-- name: Evaluate version compliance (smart comparison via firmware_check.py)
-  ansible.builtin.command:
-    cmd: >-
-      python3 {{ playbook_dir }}/../scripts/firmware_check.py
-      --platform f5 --running "{{ running_version }}" --host "{{ inventory_hostname }}"
-      --yaml {{ playbook_dir }}/../vars/golden_versions.yml
-      {{ ('--latest-version ' ~ _f5_latest_available) if _f5_latest_available | length > 0 else '' }}
-      --output ansible_facts
-  delegate_to: localhost
-  changed_when: false
-  register: _f5_check
-
-- name: Parse compliance result
-  ansible.builtin.set_fact:
-    target_version: "{{ (_f5_check.stdout | from_json)['firmware_check_' + inventory_hostname].effective_latest }}"
-    compliant: "{{ (_f5_check.stdout | from_json)['firmware_check_' + inventory_hostname].is_compliant }}"
-    is_latest: "{{ (_f5_check.stdout | from_json)['firmware_check_' + inventory_hostname].is_latest }}"
-    version_status: "{{ (_f5_check.stdout | from_json)['firmware_check_' + inventory_hostname].status_compliant }}"
-    platform_label: "f5"
+    _f5_target_volume: >-
+      {{ (_f5_volumes | rejectattr('active', 'defined') | list + _f5_volumes | selectattr('active', 'defined') | rejectattr('active') | list)
+         | map(attribute='name') | first | default(f5_default_install_volume) }}
 
 - name: Report F5 status
   ansible.builtin.debug:
-    msg: >
-      BIG-IP {{ inventory_hostname }} running={{ running_version }}
-      latest={{ target_version }} compliant={{ compliant }} is_latest={{ is_latest }}
-      status={{ version_status }}
+    msg: >-
+      BIG-IP {{ inventory_hostname }} model={{ _f5_model }} failover={{ _f5_failover }}
+      running={{ running_version }} golden={{ target_version }} status={{ version_status }}
+      install-volume={{ _f5_target_volume }}
+
+- name: Hold the active HA unit
+  when:
+    - needs_upgrade | bool
+    - apply_cleared | bool
+    - _f5_failover == 'active'
+    - not (f5_allow_active_upgrade | bool)
+  ansible.builtin.set_fact:
+    upgrade_action: "HELD: active unit — upgrade the standby first, fail over, then re-run"
+    _f5_hold: true
 
 - name: Upgrade F5 (guarded)
   when:
-    - not (compliant | bool)
+    - needs_upgrade | bool
     - apply_cleared | bool
+    - not (_f5_hold | default(false))
   block:
-    - name: Save/backup current config (UCS archive)
-      f5networks.f5_modules.bigip_ucs_fetch:
-        provider: "{{ _f5_provider }}"
-        src: "pre-upgrade-{{ ansible_date_time.iso8601_basic_short | default('run') }}.ucs"
-        dest: "{{ playbook_dir }}/../backups/{{ inventory_hostname }}/pre-upgrade-{{ ansible_date_time.iso8601_basic_short | default('run') }}.ucs"
-
-    - name: Upload golden BIG-IP image
-      f5networks.f5_modules.bigip_software_image:
-        provider: "{{ _f5_provider }}"
-        image: "{{ playbook_dir }}/../images/{{ golden_versions.f5.image_file }}"
-
-    - name: Install image to inactive volume
-      f5networks.f5_modules.bigip_software_install:
-        provider: "{{ _f5_provider }}"
-        image: "{{ golden_versions.f5.image_file }}"
-        state: "{{ 'activated' if reboot_after_upgrade | bool else 'installed' }}"
-      register: _f5_install
-
-    - name: Record upgrade action
+    - name: Simulated upgrade plan
+      when: (simulate | default(false) | bool) or (simulate_apply_only | default(false) | bool)
       ansible.builtin.set_fact:
-        upgrade_action: "software_install -> {{ target_version }} state={{ 'activated' if reboot_after_upgrade | bool else 'installed' }}"
+        upgrade_action: >-
+          SIMULATED: save UCS, upload {{ golden_versions.f5.image_file }}, install to {{ _f5_target_volume }}{{ ' and boot into it' if reboot_after_upgrade | bool else ' (boot deferred)' }}
+
+    - name: Live upgrade
+      when: not ((simulate | default(false) | bool) or (simulate_apply_only | default(false) | bool))
+      block:
+        - name: Create backup directory
+          ansible.builtin.file:
+            path: "{{ playbook_dir }}/../backups/{{ inventory_hostname }}"
+            state: directory
+            mode: "0750"
+          delegate_to: localhost
+
+        - name: Save and download UCS archive
+          f5networks.f5_modules.bigip_ucs_fetch:
+            provider: "{{ _f5_provider }}"
+            src: "pre-upgrade-{{ lookup('pipe', 'date +%Y%m%dT%H%M%S') }}.ucs"
+            dest: "{{ playbook_dir }}/../backups/{{ inventory_hostname }}/"
+            create_on_missing: true
+          delegate_to: localhost
+
+        - name: Upload golden ISO (skipped when already on the box)
+          when: golden_versions.f5.image_file not in _f5_images
+          f5networks.f5_modules.bigip_software_image:
+            provider: "{{ _f5_provider }}"
+            image: "{{ f5_image_dir }}/{{ golden_versions.f5.image_file }}"
+          delegate_to: localhost
+
+        - name: Install to inactive volume
+          f5networks.f5_modules.bigip_software_install:
+            provider: "{{ _f5_provider }}"
+            image: "{{ golden_versions.f5.image_file }}"
+            volume: "{{ _f5_target_volume }}"
+            state: "{{ 'activated' if reboot_after_upgrade | bool else 'installed' }}"
+          delegate_to: localhost
+
+        - name: Record upgrade action
+          ansible.builtin.set_fact:
+            upgrade_action: >-
+              {{ golden_versions.f5.image_file }} installed to {{ _f5_target_volume }}{{ ' and activated' if reboot_after_upgrade | bool else ' (boot deferred)' }}

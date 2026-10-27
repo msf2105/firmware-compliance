@@ -1,7 +1,11 @@
 # Firmware Compliance Workflow (Ansible)
 
+> Full setup instructions: [../docs/setup-guide.md](../docs/setup-guide.md).
+> Inventories: `inventory/hosts.yml` (prod, Secret Server) · `inventory/dev.yml`
+> (EVE-NG + Bitwarden) · `inventory/demo.yml` (simulated, runs anywhere).
+
 Multi-platform firmware **audit + guarded remediation** across F5 BIG-IP, Cisco
-(ACI, ASA, Catalyst Center/DNAC, IOS/IOS-XE, IOS-XR, ISE, NX-OS, UCS) and Palo
+(Catalyst SD-WAN, Catalyst Center, IOS-XE, plus ACI, ASA, IOS-XR, ISE, NX-OS, UCS) and Palo
 Alto — with credentials pulled at run time from **Delinea Secret Server** and
 every change wrapped in a **ServiceNow** change record.
 

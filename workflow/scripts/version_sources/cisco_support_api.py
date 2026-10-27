@@ -32,7 +32,7 @@ from .base import HTTPClient, EnvCreds, FileCache
 # Cisco OAuth2 token URL
 _TOKEN_URL = "https://id.cisco.com/oauth2/default/v1/token"
 # Cisco Support API base
-_API_BASE = "https://api.cisco.com"
+_API_BASE = os.environ.get("CISCO_API_BASE", "https://apix.cisco.com")
 # Token cache file (tokens last ~1 hour)
 _TOKEN_CACHE_KEY = "cisco_oauth_token"
 
@@ -111,10 +111,12 @@ class CiscoSupportAPIClient:
         if not token:
             return None
 
+        # v2 "suggested releases by PID (no images)" endpoint
         status, parsed, body = self._http.get(
-            f"{_API_BASE}/software/suggestion/v2/suggests",
+            f"{_API_BASE}/software/suggestion/v2/suggestions/releases/productIds/"
+            f"{urllib.parse.quote(product_id)}",
             headers=self._auth_headers(),
-            params={"product": product_id},
+            params={"pageIndex": "1"},
         )
 
         if status != 200 or not parsed:
@@ -137,9 +139,22 @@ class CiscoSupportAPIClient:
         if not data:
             return None
 
-        suggestions = data.get("suggestions", data.get("suggests", []))
-        if not suggestions and isinstance(data, list):
+        suggestions = []
+        if isinstance(data, dict):
+            # v2 shape: {"productList": [{"product": {...}, "suggestions": [...]}]}
+            for prod in data.get("productList", []) or []:
+                suggestions.extend(prod.get("suggestions", []) or [])
+            if not suggestions:
+                suggestions = data.get("suggestions", data.get("suggests", [])) or []
+        elif isinstance(data, list):
             suggestions = data
+
+        # v2 marks Cisco's pick with isSuggested == "Y"; version in releaseFormat1
+        for s in suggestions:
+            if isinstance(s, dict) and str(s.get("isSuggested", "")).upper() == "Y":
+                v = s.get("releaseFormat1") or s.get("releaseFormat2") or s.get("release")
+                if v:
+                    return v
 
         if not suggestions:
             return None
@@ -154,7 +169,7 @@ class CiscoSupportAPIClient:
         # Fall back to the first available release (typically sorted newest-first)
         for s in suggestions:
             if isinstance(s, dict):
-                version = s.get("release", s.get("version"))
+                version = s.get("releaseFormat1") or s.get("release") or s.get("version")
                 if version:
                     return version
 

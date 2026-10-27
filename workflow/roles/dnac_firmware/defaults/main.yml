@@ -1,0 +1,9 @@
+---
+# dnac_firmware (Catalyst Center) defaults
+catalystcenter_port: 443
+catalystcenter_verify: false            # set true once the Catalyst Center cert chain is trusted
+catalystcenter_api_version: "{{ golden_versions.dnac.api_version | default('2.3.7.6') }}"
+catalystcenter_device_limit: 500        # page size for the inventory pull
+# Only consider devices whose 'family' matches one of these (Catalyst Center
+# inventory families). Empty list = every family.
+catalystcenter_families: ["Switches and Hubs", "Routers"]

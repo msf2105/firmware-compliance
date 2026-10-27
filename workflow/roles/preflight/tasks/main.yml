@@ -13,8 +13,8 @@
 
 - name: Evaluate maintenance window
   ansible.builtin.set_fact:
-    _now_hour: "{{ ('%H' | strftime(ansible_date_time.epoch | int)) | int if ansible_date_time is defined else (lookup('pipe','date +%H') | int) }}"
-    _now_dow: "{{ (lookup('pipe','date +%u') | int) }}"   # 1=Mon .. 7=Sun
+    _now_hour: "{{ ('%H' | strftime(ansible_date_time.epoch | int)) | int if ansible_date_time is defined else (lookup('pipe', 'date +%H') | int) }}"
+    _now_dow: "{{ (lookup('pipe', 'date +%u') | int) }}"   # 1=Mon .. 7=Sun
   run_once: true
   delegate_to: localhost
 

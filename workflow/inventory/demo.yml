@@ -1,0 +1,65 @@
+---
+# =====================================================================
+# DEMO inventory — every device is SIMULATED (simulate: true).
+#
+# Nothing is contacted except, optionally, ServiceNow: the full workflow
+# (credentials -> preflight gate -> compliance -> CAB-gated remediation ->
+# report -> change close) runs end to end so it can be rehearsed or shown
+# anywhere. Reports are clearly labelled SIMULATED.
+#
+#   ansible-playbook playbooks/site.yml -i inventory/demo.yml
+#
+# ServiceNow: SNOW_MODE=mock (default here) keeps change records local
+# (scripts/mock_snow.py approves them). Export SNOW_MODE=live plus the
+# SNOW_* variables to use a real instance / Personal Developer Instance.
+# =====================================================================
+all:
+  vars:
+    simulate: true
+    credential_source: simulate
+    snow_mode: "{{ lookup('env', 'SNOW_MODE') | default('mock', true) }}"
+    # Demo only: maintenance window open 24x7 so the apply path can be shown
+    # any time. Production keeps the Sat/Sun 22:00-06:00 default.
+    maint_days: [1, 2, 3, 4, 5, 6, 7]
+    maint_start_hour: 0
+    maint_end_hour: 0
+
+  children:
+    ios:
+      hosts:
+        dal-core-sw01: { ansible_host: 192.0.2.11, simulated_running_version: "17.09.05", simulated_model: C9300-48P }
+        dal-dist-sw02: { ansible_host: 192.0.2.12, simulated_running_version: "17.06.04", simulated_model: C9300-24T }
+        dal-wan-rtr01: { ansible_host: 192.0.2.13, simulated_running_version: "17.12.01", simulated_model: C8300-1N1S-6T }
+
+    dnac:
+      hosts:
+        catc01:
+          ansible_host: 192.0.2.20
+          simulated_running_version: "2.3.7.6"
+          simulated_managed_devices:
+            - { hostname: rich-acc-sw01, managementIpAddress: 192.0.2.101, family: "Switches and Hubs", series: "Cisco Catalyst 9300 Series Switches", softwareVersion: "17.09.05" }
+            - { hostname: rich-acc-sw02, managementIpAddress: 192.0.2.102, family: "Switches and Hubs", series: "Cisco Catalyst 9300 Series Switches", softwareVersion: "17.06.05" }
+            - { hostname: rich-acc-sw03, managementIpAddress: 192.0.2.103, family: "Switches and Hubs", series: "Cisco Catalyst 9200 Series Switches", softwareVersion: "17.03.05" }
+            - { hostname: rich-idf-sw04, managementIpAddress: 192.0.2.104, family: "Switches and Hubs", series: "Cisco Catalyst 9500 Series Switches", softwareVersion: "17.09.04a" }
+
+    sdwan:
+      hosts:
+        sdwan-mgr01:
+          ansible_host: 192.0.2.30
+          simulated_managed_devices:
+            - { hostname: vmanage01, system_ip: 10.255.0.1, uuid: 11111111-aaaa-4000-8000-000000000001, device_type: vmanage, model: vmanage, version: "20.12.4", reachability: reachable }
+            - { hostname: vbond01, system_ip: 10.255.0.2, uuid: 11111111-aaaa-4000-8000-000000000002, device_type: vbond, model: vedge-cloud, version: "20.12.4", reachability: reachable }
+            - { hostname: vsmart01, system_ip: 10.255.0.3, uuid: 11111111-aaaa-4000-8000-000000000003, device_type: vsmart, model: vsmart, version: "20.12.4", reachability: reachable }
+            - { hostname: br-hou-edge01, system_ip: 10.255.1.1, uuid: 11111111-aaaa-4000-8000-000000000101, device_type: vedge, model: vedge-C8300-1N1S-6T, version: "17.09.04a", reachability: reachable }
+            - { hostname: br-aus-edge01, system_ip: 10.255.1.2, uuid: 11111111-aaaa-4000-8000-000000000102, device_type: vedge, model: vedge-C8000V, version: "17.12.04", reachability: reachable }
+            - { hostname: br-sat-edge01, system_ip: 10.255.1.3, uuid: 11111111-aaaa-4000-8000-000000000103, device_type: vedge, model: vedge-ISR4331, version: "17.06.06a", reachability: unreachable }
+
+    panos:
+      hosts:
+        dal-fw01a: { ansible_host: 192.0.2.41, simulated_running_version: "10.2.9-h1", simulated_model: PA-3220, simulated_ha_state: active, simulated_latest_available: "11.2.4" }
+        dal-fw01b: { ansible_host: 192.0.2.42, simulated_running_version: "10.2.9-h1", simulated_model: PA-3220, simulated_ha_state: passive, simulated_latest_available: "11.2.4" }
+
+    f5:
+      hosts:
+        dal-ltm01: { ansible_host: 192.0.2.51, simulated_running_version: "17.1.1.3", simulated_model: "BIG-IP i5800" }
+        dal-ltm02: { ansible_host: 192.0.2.52, simulated_running_version: "16.1.4.1", simulated_model: "BIG-IP i5800", simulated_ha_state: standby }

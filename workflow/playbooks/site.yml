@@ -2,184 +2,189 @@
 # =====================================================================
 # site.yml — multi-platform firmware compliance orchestrator.
 #
-# Flow:
-#   Play 1 (localhost)  Open a normal (CAB-reviewed) SNOW change, OR verify
-#                       the approval state of an existing one. If CAB has
-#                       not approved, the run proceeds as audit-only.
-#   Play 2 (devices)    Per host: fetch creds from Secret Server, run the
-#                       preflight safety gate, then dispatch the platform
-#                       role by group membership. Each role AUDITS always
-#                       and only UPGRADES when apply_cleared is true.
-#   Play 3 (localhost)  Build the compliance report + close the change.
+#   Play 1 (localhost)  apply mode only: open a NORMAL ServiceNow change for
+#                       CAB review, or read the approval on an existing one.
+#   Play 2 (devices)    per host: credentials (Secret Server / Bitwarden /
+#                       vault) -> preflight gate -> platform role. Roles always
+#                       AUDIT and only change a device when apply_cleared.
+#                       A failing host is caught and reported, never silently
+#                       dropped.
+#   Play 3 (localhost)  compliance report (JSON + HTML), attach to the change,
+#                       close it (or leave a note when nothing was applied).
 #
-# SAFETY: dry-run (audit-only) is the DEFAULT. A real firmware push needs,
-# all at once:  -e apply_updates=true  AND  inside the maintenance window
-# AND (by default) a ServiceNow change ticket  AND  CAB approval on that
-# ticket. Miss any one -> audit only.
+# SAFETY: audit is the default. A firmware push needs ALL of:
+#   -e apply_updates=true, inside the maintenance window, a change number,
+#   and CAB approval=approved on that change. Miss any one -> audit only.
 #
-# CAB APPROVAL WORKFLOW:
-#   Run 1 (open):  ansible-playbook playbooks/site.yml -e apply_updates=true
-#                  → Opens a normal SNOW change, audits all devices, does NOT
-#                    apply. Prints the change number for CAB review.
-#   CAB reviews and approves the change in ServiceNow.
-#   Run 2 (apply): ansible-playbook playbooks/site.yml -e apply_updates=true
-#                      -e snow_change_number=CHGxxxxxx
-#                  → Verifies approval=approved, then applies inside window.
-#
-# Usage:
-#   Audit everything (safe, default):
-#     ansible-playbook playbooks/site.yml
-#   Audit a single platform:
-#     ansible-playbook playbooks/site.yml --limit nxos
-#   Open a change for CAB review (audits, does not apply):
-#     ansible-playbook playbooks/site.yml -e apply_updates=true
-#   Apply after CAB approval (inside window):
-#     ansible-playbook playbooks/site.yml -e apply_updates=true -e snow_change_number=CHGxxxxxx
-#
-# Required env (never stored in repo):
-#   TSS_USERNAME / TSS_PASSWORD        Delinea Secret Server auth
-#   SNOW_INSTANCE / SNOW_USERNAME / SNOW_PASSWORD   ServiceNow auth
+#   Audit (default):     ansible-playbook playbooks/site.yml
+#   Open change (run 1): ansible-playbook playbooks/site.yml -e apply_updates=true
+#   Apply (run 2):       ansible-playbook playbooks/site.yml -e apply_updates=true -e snow_change_number=CHGxxxxxxx
 # =====================================================================
 
 # ---------- Play 1: open or verify the change record (apply mode) ----------
 - name: Open or verify ServiceNow change (apply mode)
   hosts: localhost
-  gather_facts: true
+  gather_facts: false
   vars_files:
     - ../vars/golden_versions.yml
   tasks:
-    # If the operator passed snow_change_number, we're re-running after CAB
-    # review — query the existing change's approval state instead of opening
-    # a new one.
-    - name: Check CAB approval on existing change
+    - name: Check CAB approval on the existing change (run 2)
       when:
         - apply_updates | bool
         - require_change_ticket | bool
-        - snow_change_number is defined
-        - snow_change_number | length > 0
+        - snow_change_number | default('') | length > 0
       ansible.builtin.include_role:
         name: servicenow
       vars:
         snow_action: check_approval
 
-    # No change number provided — this is a first run. Open a new normal
-    # (CAB-reviewed) change request. The playbook will audit but NOT apply
-    # until the CAB approves and the operator re-runs with the change number.
-    - name: Open new normal change request
+    - name: Open a new normal change for CAB review (run 1)
       when:
         - apply_updates | bool
         - require_change_ticket | bool
-        - snow_change_number is not defined or snow_change_number | length == 0
+        - snow_change_number | default('') | length == 0
       ansible.builtin.include_role:
         name: servicenow
       vars:
         snow_action: open
+        snow_short_description: "{{ ('Firmware compliance remediation — ' ~ _scope) | truncate(155) }}"
+        snow_description: |-
+          Automated firmware remediation via Ansible (firmware-compliance).
+          Scope: {{ _scope }}
+          Reboot/activation requested: {{ reboot_after_upgrade }}
+          Pre-change audit runs now; no device is touched until this change is
+          CAB-approved and the job is re-run with -e snow_change_number=<this CHG>.
+        _scope: "{{ ansible_limit | default(groups['all'] | difference(['localhost']) | join(', ')) }}"
 
-    - name: Warn that CAB approval is pending (first run)
+    - name: Move the approved change to Implement
       when:
         - apply_updates | bool
-        - require_change_ticket | bool
-        - require_cab_approval | bool
-        - cab_approved is not defined or not (cab_approved | bool)
+        - cab_approved | default(false) | bool
+      ansible.builtin.include_role:
+        name: servicenow
+      vars:
+        snow_action: implement
+
+    - name: Announce CAB status
+      when: apply_updates | bool and require_change_ticket | bool
       ansible.builtin.debug:
         msg: >-
-          CAB APPROVAL REQUIRED — Change {{ snow_change_number | default('pending') }}
-          is not yet approved. This run will AUDIT ONLY. After the CAB approves
-          the change, re-run: ansible-playbook playbooks/site.yml -e apply_updates=true
-          -e snow_change_number={{ snow_change_number | default('CHGxxxxxx') }}
+          {{ snow_change_number }} approval={{ cab_approval_state | default('requested') | upper }}
+          state={{ snow_change_state | default('assess') | upper }}.
+          {{ 'Cleared by CAB — devices inside the window will be remediated.' if cab_approved | default(false) | bool
+             else ('Change is no longer open — open a new one (run without snow_change_number). AUDIT ONLY.'
+                   if (snow_change_state | default('') | lower) in ['closed', 'canceled', 'review']
+                   else 'NOT approved — this run is AUDIT ONLY. After CAB approval re-run with -e snow_change_number=' ~ snow_change_number) }}
 
-    - name: Publish change identifiers to all device hosts
-      when: snow_change_number is defined
+    - name: Publish change identifiers to every device host
+      when: snow_change_number | default('') | length > 0
       ansible.builtin.add_host:
         name: "{{ item }}"
         snow_change_sys_id: "{{ snow_change_sys_id }}"
         snow_change_number: "{{ snow_change_number }}"
         cab_approved: "{{ cab_approved | default(false) }}"
-      loop: "{{ groups['all'] | difference(['ungrouped', 'localhost']) }}"
+        cab_approval_state: "{{ cab_approval_state | default('requested') }}"
+      loop: "{{ groups['all'] | difference(['localhost']) }}"
       changed_when: false
 
 # ---------- Play 2: per-device audit + guarded remediation ----------
 - name: Firmware compliance across all platforms
-  hosts: >-
-    ios:iosxr:nxos:asa:aci:dnac:ise:ucs:panos:f5
+  hosts: all          # each host is dispatched by its platform group below
   gather_facts: false
   vars_files:
     - ../vars/golden_versions.yml
-  # keep going even if one platform errors — we still want a full report
-  any_errors_fatal: false
+  vars:
+    known_platforms: [ios, dnac, sdwan, panos, f5, iosxr, nxos, asa, aci, ise, ucs]
   tasks:
-    - name: Resolve device credentials from Secret Server
-      ansible.builtin.include_role:
-        name: secret_server
+    - name: Audit / remediate this device
+      block:
+        - name: Resolve device credentials
+          ansible.builtin.include_role:
+            name: secret_server
 
-    - name: Run preflight safety gate
-      ansible.builtin.include_role:
-        name: preflight
+        - name: Run preflight safety gate
+          ansible.builtin.include_role:
+            name: preflight
 
-    - name: Dispatch platform firmware role by group membership
-      ansible.builtin.include_role:
-        name: "{{ item }}_firmware"
-      # group_names holds every group this host belongs to; the intersection
-      # with our known platforms selects exactly one role per host.
-      loop: "{{ group_names | intersect(['ios','iosxr','nxos','asa','aci','dnac','ise','ucs','panos','f5']) }}"
+        - name: Dispatch platform role by group membership
+          ansible.builtin.include_role:
+            name: "{{ platform_role }}_firmware"
+          loop: "{{ group_names | intersect(known_platforms) }}"
+          loop_control:
+            loop_var: platform_role
 
-    - name: Add per-device result work note to change (apply mode)
-      when:
-        - snow_change_sys_id is defined
-        - snow_change_number is defined
+      rescue:
+        - name: Record the failure so it shows in the report and the change
+          ansible.builtin.set_fact:
+            run_error: "{{ (ansible_failed_result.msg | default('task failed')) | string | truncate(300) }}"
+            failed_task: "{{ ansible_failed_task.name | default('?') }}"
+            platform_label: "{{ platform_label | default(group_names | intersect(known_platforms) | first | default('?')) }}"
+            running_version: "{{ running_version | default('n/a') }}"
+            compliant: false
+            version_status: ERROR
+
+    - name: Post this device's result to the change
+      when: snow_change_sys_id is defined
       ansible.builtin.include_role:
         name: servicenow
       vars:
         snow_action: note
         snow_note: >-
           {{ inventory_hostname }} [{{ platform_label | default('?') }}]
-          running={{ running_version | default('n/a') }}
-          target={{ target_version | default('n/a') }}
-          compliant={{ compliant | default('n/a') }}
-          {{ ('action=' + upgrade_action) if (upgrade_action is defined) else '' }}
+          running={{ running_version | default('n/a') }} golden={{ target_version | default('n/a') }}
+          status={{ version_status | default('n/a') }}
+          {{ ('managed: ' ~ (managed_results | selectattr('compliant') | list | length) ~ '/' ~ (managed_results | length) ~ ' compliant') if managed_results is defined else '' }}
+          {{ ('action: ' ~ upgrade_action) if upgrade_action is defined else '' }}
+          {{ ('ERROR in "' ~ failed_task ~ '": ' ~ run_error) if run_error is defined else '' }}
 
-# ---------- Play 3: aggregate report + close the change ----------
+# ---------- Play 3: report + close the change ----------
 - name: Build compliance report and close change
   hosts: localhost
-  gather_facts: true
+  gather_facts: false
   vars_files:
     - ../vars/golden_versions.yml
   tasks:
-    - name: Ensure reports directory exists
-      ansible.builtin.file:
-        path: "{{ playbook_dir }}/../reports"
-        state: directory
-        mode: "0755"
-
-    - name: Generate aggregated compliance report
+    - name: Generate compliance report
       ansible.builtin.include_role:
         name: compliance_report
 
-    - name: Close ServiceNow change (apply mode, CAB approved)
+    - name: Attach report to the change
+      when: snow_change_sys_id is defined
+      ansible.builtin.include_role:
+        name: servicenow
+      vars:
+        snow_action: attach
+        snow_attachments:
+          - path: "{{ report_json_path }}"
+          - path: "{{ report_html_path }}"
+
+    - name: Close the change (something was applied)
       when:
         - snow_change_sys_id is defined
-        - snow_change_number is defined
         - cab_approved | default(false) | bool
+        - report_summary.applied_hosts | length > 0
       ansible.builtin.include_role:
         name: servicenow
       vars:
         snow_action: close
-        snow_close_code: successful
+        snow_close_code: >-
+          {{ 'unsuccessful' if report_summary.errors | length == report_summary.applied_hosts | length
+             else ('successful_issues' if report_summary.errors | length > 0 else 'successful') }}
         snow_close_notes: >-
-          Firmware compliance run complete. CAB approval was verified.
-          See attached Ansible report artifact under reports/.
-          Mode: {{ 'APPLY' if apply_updates | bool else 'DRY-RUN' }}.
+          Ansible firmware remediation complete. Applied on: {{ report_summary.applied_hosts | join(', ') }}.
+          Compliant {{ report_summary.compliant }}/{{ report_summary.total }}.
+          Errors: {{ report_summary.errors | join(', ') if report_summary.errors else 'none' }}.
+          Report attached.
 
-    - name: Add note to unapproved change (audit-only outcome)
+    - name: Leave the change open with a note (nothing applied)
       when:
         - snow_change_sys_id is defined
-        - snow_change_number is defined
-        - not (cab_approved | default(false) | bool)
+        - report_summary.applied_hosts | length == 0
       ansible.builtin.include_role:
         name: servicenow
       vars:
         snow_action: note
         snow_note: >-
-          Firmware compliance audit completed. No changes were applied —
-          CAB approval is pending. See report artifact under reports/.
-          Mode: DRY-RUN (CAB not approved).
+          Pre-change audit complete — no device was modified
+          ({{ 'CAB approval pending' if not (cab_approved | default(false) | bool) else 'outside the maintenance window or nothing to remediate' }}).
+          Compliant {{ report_summary.compliant }}/{{ report_summary.total }}. Report attached.

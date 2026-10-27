@@ -1,0 +1,33 @@
+---
+# Included only after an activate/reload. meta tasks ignore `when`, so the
+# reset lives in this conditionally-included file.
+- name: Wait for SSH to go down
+  ansible.builtin.wait_for:
+    host: "{{ ansible_host }}"
+    port: 22
+    state: stopped
+    timeout: 600
+  delegate_to: localhost
+
+- name: Wait for SSH to come back
+  ansible.builtin.wait_for:
+    host: "{{ ansible_host }}"
+    port: 22
+    state: started
+    delay: 120
+    timeout: "{{ ios_reload_wait }}"
+  delegate_to: localhost
+
+- name: Reset persistent connection
+  ansible.builtin.meta: reset_connection
+
+- name: Re-gather version after reload
+  cisco.ios.ios_facts:
+    gather_subset: [min]
+
+- name: Assert device is on golden version
+  ansible.builtin.assert:
+    that: >-
+      (ansible_net_version | regex_findall('\\d+') | map('int') | list)
+      == (target_version | regex_findall('\\d+') | map('int') | list)
+    fail_msg: "{{ inventory_hostname }} came back on {{ ansible_net_version }}, expected {{ target_version }}"

@@ -1,0 +1,10 @@
+---
+# Cross-role facts (running_version, cab_approved, snow_*...) are a deliberate
+# contract between roles, so role-prefixed variable naming is not enforced.
+profile: production
+exclude_paths:
+  - .github/
+  - workflow/reports/
+  - workflow/backups/
+skip_list:
+  - var-naming[no-role-prefix]

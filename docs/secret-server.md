@@ -1,4 +1,18 @@
-# Credential Flow — Secret Server
+# Credential Flow — Secret Server (prod) / Bitwarden (dev)
+
+The `secret_server` role supports several backends behind one variable,
+`credential_source`; every backend sets the same `dev_username` / `dev_password` /
+`dev_enable` facts, so platform roles never change:
+
+| `credential_source` | Backend | Per-host key | Auth (env) |
+|---|---|---|---|
+| `secret_server` | Delinea Secret Server (`community.general.tss`) | `secret_id` | `TSS_TOKEN` or `TSS_USERNAME`/`TSS_PASSWORD` (+`TSS_DOMAIN`) |
+| `bitwarden_sm` | Bitwarden Secrets Manager (`bws`) — value is JSON `{"username","password","enable"}` | `bws_secret_id` | `BWS_ACCESS_TOKEN` |
+| `bitwarden` | Bitwarden Password Manager (`bw`) — login item + custom field `enable` | `bw_item` | `BW_SESSION` |
+| `vault` | ansible-vault `vault_device_credentials` dict | `secret_id` or `default` | vault password |
+| `simulate` | none (demo inventory) | — | — |
+
+The rest of this page describes the Secret Server path.
 
 Device credentials are never stored in the repo or inventory. They are resolved
 at run time from Delinea/Thycotic Secret Server.
@@ -34,8 +48,8 @@ Each device secret should expose fields with these slugs:
 | `password` | `dev_password` | yes |
 | `enable-password` | `dev_enable` | no (falls back to password) |
 
-If your Secret Server template uses different slugs, adjust the `selectattr`
-filters in `roles/secret_server/tasks/main.yml`.
+If your Secret Server template uses different slugs, set `tss_field_username`,
+`tss_field_password`, `tss_field_enable` in group_vars — no code change needed.
 
 ## Alternative: DevOps Secrets Vault
 

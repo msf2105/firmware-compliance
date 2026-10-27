@@ -1,0 +1,14 @@
+---
+# ios_firmware defaults
+
+# Per-group/host override merged over golden_versions.ios, e.g. in
+# inventory/group_vars/ios_c9200.yml:
+#   ios_golden_override: { version: "17.09.05", image_file: "cat9k_lite_iosxe.17.09.05.SPA.bin", image_md5: "..." }
+ios_golden_override: {}
+
+# Seconds allowed for the image copy (multi-hundred-MB over SCP/HTTP).
+ios_copy_timeout: 3600
+# Seconds to wait for the switch to come back after an activate/reload.
+ios_reload_wait: 1800
+# Remove inactive packages before staging (frees flash on install-mode boxes).
+ios_cleanup_inactive: true

@@ -1,0 +1,13 @@
+# Python dependencies for the controller / execution environment
+pyyaml>=6.0
+python-tss-sdk>=1.2.2        # Delinea Secret Server lookup (community.general.tss)
+pan-os-python>=1.12          # paloaltonetworks.panos
+pan-python>=0.17
+xmltodict>=0.13
+catalystcentersdk>=2.3.7.6   # cisco.catalystcenter
+requests>=2.31               # servicenow.itsm, f5networks
+objectpath                   # f5networks.f5_modules
+jmespath
+netaddr
+ansible-pylibssh             # fast network_cli transport
+paramiko

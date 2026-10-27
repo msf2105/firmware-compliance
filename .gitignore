@@ -13,3 +13,9 @@ __pycache__/
 *.env
 .env
 secrets.yml
+
+# test / tool caches
+.pytest_cache/
+
+# vendor images are large and licensed - never commit
+workflow/images/

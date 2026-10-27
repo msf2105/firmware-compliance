@@ -1,0 +1,259 @@
+---
+# =====================================================================
+# sdwan_firmware — Cisco Catalyst SD-WAN via the SD-WAN Manager (vManage) API.
+#
+# One inventory host = one SD-WAN Manager. The role:
+#   1. Logs in (j_security_check + XSRF token) and pulls /dataservice/device.
+#   2. Judges the fabric against golden_versions.sdwan:
+#        vmanage           -> manager_version     (report only)
+#        vsmart / vbond    -> controller_version  (report only)
+#        vedge (WAN edges) -> edge_targets[] matched on device-model
+#   3. When cleared to apply: confirms the image is in the SD-WAN Manager
+#      software repository, then runs device/action/install per target version
+#      for the non-compliant edges. With reboot_after_upgrade=false the image
+#      is only downloaded/installed (staged); =true activates it and sets it
+#      as the default partition.
+#
+# Controllers are deliberately never upgraded here: Cisco's required order is
+# Manager -> Validators -> Controllers -> Edges, and the controller steps are a
+# separate, supervised change.
+# =====================================================================
+
+- name: Set SD-WAN base facts
+  ansible.builtin.set_fact:
+    platform_label: sdwan
+    _sdw_base: "https://{{ ansible_host }}:{{ sdwan_port }}"
+
+# ---------------------------------------------------------------- audit
+- name: Live SD-WAN Manager session + inventory
+  when: not (simulate | default(false) | bool)
+  delegate_to: localhost
+  block:
+    - name: Log in to SD-WAN Manager
+      ansible.builtin.uri:
+        url: "{{ _sdw_base }}/j_security_check"
+        method: POST
+        body_format: form-urlencoded
+        body:
+          j_username: "{{ dev_username }}"
+          j_password: "{{ dev_password }}"
+        validate_certs: "{{ sdwan_validate_certs }}"
+        return_content: true
+        status_code: [200, 302]
+      register: _sdw_login
+      no_log: true
+      failed_when: >-
+        _sdw_login.status not in [200, 302]
+        or '<html>' in (_sdw_login.content | default('') | lower)
+
+    - name: Get XSRF token
+      ansible.builtin.uri:
+        url: "{{ _sdw_base }}/dataservice/client/token"
+        headers:
+          Cookie: "{{ _sdw_login.cookies_string }}"
+        validate_certs: "{{ sdwan_validate_certs }}"
+        return_content: true
+      register: _sdw_token
+      no_log: true
+
+    - name: Build authenticated headers
+      ansible.builtin.set_fact:
+        _sdw_headers:
+          Cookie: "{{ _sdw_login.cookies_string }}"
+          X-XSRF-TOKEN: "{{ _sdw_token.content | trim }}"
+          Content-Type: application/json
+      no_log: true
+
+    - name: Pull fabric device inventory
+      ansible.builtin.uri:
+        url: "{{ _sdw_base }}/dataservice/device"
+        headers: "{{ _sdw_headers }}"
+        validate_certs: "{{ sdwan_validate_certs }}"
+      register: _sdw_devices_raw
+
+    - name: Normalise live inventory
+      ansible.builtin.set_fact:
+        _sdw_devices: >-
+          {%- set out = [] -%}
+          {%- for d in _sdw_devices_raw.json.data | default([]) -%}
+          {%-   set _ = out.append({'hostname': d['host-name'] | default(d['system-ip']),
+                                    'system_ip': d['system-ip'], 'uuid': d['uuid'],
+                                    'device_type': d['device-type'], 'model': d['device-model'] | default(''),
+                                    'version': d['version'] | default(''),
+                                    'reachability': d['reachability'] | default('unknown')}) -%}
+          {%- endfor -%}
+          {{ out }}
+
+- name: Simulated inventory
+  when: simulate | default(false) | bool
+  ansible.builtin.set_fact:
+    _sdw_devices: "{{ simulated_managed_devices | default([]) }}"
+
+- name: Match devices to golden targets
+  ansible.builtin.set_fact:
+    _sdw_matched: >-
+      {%- set g = golden_versions.sdwan -%}
+      {%- set out = [] -%}
+      {%- for d in _sdw_devices | selectattr('device_type', 'in', sdwan_device_types) -%}
+      {%-   if d.device_type == 'vmanage' -%}{%- set golden = g.manager_version -%}{%- set idx = -1 -%}
+      {%-   elif d.device_type in ['vsmart', 'vbond'] -%}{%- set golden = g.controller_version -%}{%- set idx = -1 -%}
+      {%-   else -%}
+      {%-     set t = g.edge_targets | selectattr('model_match', 'in', d.model) | list -%}
+      {%-     set golden = (t | first).version if t else '' -%}
+      {%-     set idx = g.edge_targets.index(t | first) if t else -1 -%}
+      {%-   endif -%}
+      {%-   set _ = out.append({'name': d.hostname, 'system_ip': d.system_ip, 'uuid': d.uuid,
+                                'device_type': d.device_type, 'model': d.model,
+                                'platform': 'sdwan', 'running': d.version, 'golden': golden,
+                                'target_index': idx, 'reachability': d.reachability}) -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: Evaluate the SD-WAN Manager release (the host row)
+  ansible.builtin.include_role:
+    name: version_check
+  vars:
+    vc_platform: sdwan
+    vc_running: "{{ (_sdw_matched | selectattr('device_type', 'equalto', 'vmanage') | map(attribute='running') | first) | default('unknown') }}"
+    vc_golden: "{{ golden_versions.sdwan.manager_version }}"
+
+- name: Evaluate fabric devices
+  ansible.builtin.include_role:
+    name: version_check
+    tasks_from: batch
+  vars:
+    vc_devices: "{{ _sdw_matched | selectattr('golden', 'truthy') | list }}"
+
+- name: Build managed-device result rows
+  ansible.builtin.set_fact:
+    managed_results: >-
+      {%- set rows = [] -%}
+      {%- for d in _sdw_matched -%}
+      {%-   set r = vc_batch_results | selectattr('host', 'equalto', d.name) | list -%}
+      {%-   set is_edge = d.device_type == 'vedge' -%}
+      {%-   set _ = rows.append({
+              'host': d.name, 'ip': d.system_ip, 'uuid': d.uuid,
+              'platform': 'sdwan-' ~ d.device_type, 'model': d.model,
+              'running': d.running, 'target': d.golden if d.golden else 'no golden defined',
+              'compliant': (r | first).is_compliant if r else false,
+              'version_status': ((r | first).status_compliant if r else 'NO-TARGET')
+                                ~ ('' if is_edge else ' (report only)'),
+              'needs_upgrade': is_edge and r and (r | first).action_needed == 'upgrade'
+                               and d.reachability == 'reachable',
+              'target_index': d.target_index, 'action': '',
+              'note': '' if d.reachability == 'reachable' else 'unreachable in SD-WAN Manager — skipped'}) -%}
+      {%- endfor -%}
+      {{ rows }}
+
+- name: Summarise SD-WAN status
+  ansible.builtin.debug:
+    msg: >-
+      SD-WAN Manager {{ inventory_hostname }} release={{ running_version }} (golden {{ target_version }}).
+      Fabric: {{ managed_results | selectattr('compliant') | list | length }}/{{ managed_results | length }} compliant,
+      {{ managed_results | selectattr('needs_upgrade') | list | length }} edge(s) eligible for upgrade.
+
+# ---------------------------------------------------------------- remediate
+- name: Edge upgrade (guarded)
+  when:
+    - apply_cleared | bool
+    - managed_results | selectattr('needs_upgrade') | list | length > 0
+  vars:
+    _versions_to_push: "{{ managed_results | selectattr('needs_upgrade') | map(attribute='target') | unique | list }}"
+  block:
+    - name: Simulated SD-WAN plan
+      when: (simulate | default(false) | bool) or (simulate_apply_only | default(false) | bool)
+      ansible.builtin.set_fact:
+        upgrade_action: >-
+          SIMULATED: {% for v in _versions_to_push %}install {{ v }}{{ ' + activate + set default' if reboot_after_upgrade | bool else ' (staged)' }} on
+          {{ managed_results | selectattr('needs_upgrade') | selectattr('target', 'equalto', v) | map(attribute='host') | join(', ') }}; {% endfor %}
+
+    - name: Live SD-WAN upgrade
+      when: not ((simulate | default(false) | bool) or (simulate_apply_only | default(false) | bool))
+      delegate_to: localhost
+      block:
+        - name: Read SD-WAN Manager software repository
+          ansible.builtin.uri:
+            url: "{{ _sdw_base }}/dataservice/device/action/software"
+            headers: "{{ _sdw_headers }}"
+            validate_certs: "{{ sdwan_validate_certs }}"
+          register: _sdw_repo
+
+        - name: Assert every target version is in the repository
+          ansible.builtin.assert:
+            that: item in (_sdw_repo.json.data | default([]) | map(attribute='versionName') | list)
+            fail_msg: "Version {{ item }} is not in the SD-WAN Manager software repository — upload it first."
+            quiet: true
+          loop: "{{ _versions_to_push }}"
+
+        - name: Start install per target version
+          ansible.builtin.uri:
+            url: "{{ _sdw_base }}/dataservice/device/action/install"
+            method: POST
+            headers: "{{ _sdw_headers }}"
+            validate_certs: "{{ sdwan_validate_certs }}"
+            body_format: json
+            body:
+              action: install
+              input:
+                vEdgeVPN: "{{ sdwan_install_vpn }}"
+                vSmartVPN: "{{ sdwan_install_vpn }}"
+                version: "{{ item }}"
+                versionType: vmanage
+                reboot: "{{ reboot_after_upgrade | bool }}"
+                sync: true
+              devices: >-
+                {%- set out = [] -%}
+                {%- for d in managed_results | selectattr('needs_upgrade') | selectattr('target', 'equalto', item) -%}
+                {%-   set _ = out.append({'deviceIP': d.ip, 'deviceId': d.uuid}) -%}
+                {%- endfor -%}{{ out }}
+              deviceType: vedge
+          loop: "{{ _versions_to_push }}"
+          register: _sdw_install
+
+        - name: Wait for install actions to finish
+          ansible.builtin.uri:
+            url: "{{ _sdw_base }}/dataservice/device/action/status/{{ item.json.id }}"
+            headers: "{{ _sdw_headers }}"
+            validate_certs: "{{ sdwan_validate_certs }}"
+          loop: "{{ _sdw_install.results }}"
+          loop_control:
+            label: "{{ item.item }}"
+          register: _sdw_status
+          until: (_sdw_status.json.summary.status | default('')) == 'done'
+          retries: "{{ sdwan_poll_retries }}"
+          delay: "{{ sdwan_poll_delay }}"
+
+        - name: Set new version as default partition
+          when: reboot_after_upgrade | bool and sdwan_set_default_after_activate | bool
+          ansible.builtin.uri:
+            url: "{{ _sdw_base }}/dataservice/device/action/defaultpartition"
+            method: POST
+            headers: "{{ _sdw_headers }}"
+            validate_certs: "{{ sdwan_validate_certs }}"
+            body_format: json
+            body:
+              action: defaultpartition
+              devices: >-
+                {%- set out = [] -%}
+                {%- for d in managed_results | selectattr('needs_upgrade') | selectattr('target', 'equalto', item) -%}
+                {%-   set _ = out.append({'deviceIP': d.ip, 'deviceId': d.uuid, 'version': item}) -%}
+                {%- endfor -%}{{ out }}
+              deviceType: vedge
+          loop: "{{ _versions_to_push }}"
+
+        - name: Record SD-WAN action
+          ansible.builtin.set_fact:
+            upgrade_action: >-
+              {% for r in _sdw_status.results %}{{ r.item.item }}:
+              {{ r.json.summary.count | default({}) | to_json }};
+              {% endfor %}{{ 'activated + default set' if reboot_after_upgrade | bool else 'staged (activation deferred)' }}
+
+- name: Log out of SD-WAN Manager
+  when: not (simulate | default(false) | bool)
+  ansible.builtin.uri:
+    url: "{{ _sdw_base }}/logout"
+    headers: "{{ _sdw_headers | default({}) }}"
+    validate_certs: "{{ sdwan_validate_certs }}"
+    status_code: [200, 302]
+  delegate_to: localhost
+  failed_when: false

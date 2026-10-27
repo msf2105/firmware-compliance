@@ -1,0 +1,34 @@
+---
+# version_check/batch — judge many controller-managed devices in one call
+# (Catalyst Center inventory, SD-WAN Manager inventory).
+#
+# Input:  vc_devices: [{name, platform, running, golden, pid?}]
+# Output: vc_batch_results: [{host, running, golden, is_compliant,
+#                             status_compliant, action_needed, ...}]
+
+- name: Compare managed-device versions in one batch
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ playbook_dir }}/../scripts/firmware_check.py"
+      - --inventory-json
+      - "{{ _inv | to_json }}"
+      - --yaml
+      - "{{ playbook_dir }}/../vars/golden_versions.yml"
+      - --output
+      - json
+      - --exit-zero
+  vars:
+    _inv: >-
+      {% set d = {} %}{% for x in vc_devices %}{% set _ = d.update({x.name: {
+        'platform': x.platform, 'running': x.running | string,
+        'golden': x.golden | default('') | string,
+        'product_id': x.pid | default('')}}) %}{% endfor %}{{ d }}
+  delegate_to: localhost
+  changed_when: false
+  register: _vc_batch_out
+  when: vc_devices | length > 0
+
+- name: Publish batch results
+  ansible.builtin.set_fact:
+    vc_batch_results: "{{ (_vc_batch_out.stdout | from_json) if (vc_devices | length > 0) else [] }}"

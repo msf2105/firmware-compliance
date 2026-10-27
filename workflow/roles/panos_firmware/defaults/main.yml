@@ -1,0 +1,7 @@
+---
+# panos_firmware defaults
+# HA safety: never upgrade the ACTIVE member of an HA pair unless explicitly
+# allowed. Upgrade the passive peer first, fail over, then the other peer.
+panos_allow_active_ha_upgrade: false
+# Seconds panos_software waits for download/install/reboot steps.
+panos_software_timeout: 3600

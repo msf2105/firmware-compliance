@@ -1,0 +1,69 @@
+---
+# =====================================================================
+# DEV inventory — EVE-NG lab + Bitwarden + ServiceNow PDI, run from AWX.
+#
+#   credentials : Bitwarden Secrets Manager (BWS_ACCESS_TOKEN from the AWX
+#                 "Bitwarden Secrets Manager" credential). Each host carries
+#                 bws_secret_id -> secret VALUE is JSON:
+#                   {"username": "netauto", "password": "...", "enable": "..."}
+#   ServiceNow  : Personal Developer Instance (SNOW_MODE=live) or mock
+#   devices     : EVE-NG nodes on the lab mgmt network (replace IPs/IDs)
+#
+# Catalyst Center does not run in EVE-NG — point catc-sandbox at a Cisco
+# DevNet Catalyst Center sandbox (audit works live; keep apply simulated).
+# Promote to prod by switching to inventory/hosts.yml (credential_source:
+# secret_server) — the roles do not change.
+# =====================================================================
+all:
+  vars:
+    credential_source: bitwarden_sm
+    # Dev convenience: Mon-Fri 08:00-18:00 lab window. Prod uses the
+    # Sat/Sun 22:00-06:00 default in roles/preflight/defaults.
+    maint_days: [1, 2, 3, 4, 5]
+    maint_start_hour: 8
+    maint_end_hour: 18
+
+  children:
+    ios:
+      hosts:
+        lab-c8kv-01: { ansible_host: 172.16.10.11, bws_secret_id: "00000000-0000-0000-0000-000000000011" }
+        lab-c8kv-02: { ansible_host: 172.16.10.12, bws_secret_id: "00000000-0000-0000-0000-000000000011" }
+      vars:
+        ansible_network_os: cisco.ios.ios
+        ansible_connection: ansible.netcommon.network_cli
+        # Catalyst 8000V uses a different image than Cat9k — override golden here
+        ios_golden_override:
+          version: "17.12.04"
+          image_file: "c8000v-universalk9.17.12.04.SPA.bin"
+          image_disk: "bootflash:"
+          image_server: "http://172.16.10.250/images"
+          image_md5: ""
+          cisco_pid: "C8000V"
+
+    dnac:
+      hosts:
+        catc-sandbox:
+          ansible_host: sandboxdnac.cisco.com     # confirm current host/creds on developer.cisco.com
+          bws_secret_id: "00000000-0000-0000-0000-000000000061"
+          simulate_apply_only: true
+      vars:
+        ansible_connection: local
+        catalystcenter_verify: false
+
+    sdwan:
+      hosts:
+        lab-vmanage01: { ansible_host: 172.16.10.30, bws_secret_id: "00000000-0000-0000-0000-000000000030" }
+      vars:
+        ansible_connection: local
+
+    panos:
+      hosts:
+        lab-pa-vm01: { ansible_host: 172.16.10.41, bws_secret_id: "00000000-0000-0000-0000-000000000041" }
+      vars:
+        ansible_connection: local
+
+    f5:
+      hosts:
+        lab-bigip-ve01: { ansible_host: 172.16.10.51, bws_secret_id: "00000000-0000-0000-0000-000000000051" }
+      vars:
+        ansible_connection: local

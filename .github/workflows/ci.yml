@@ -1,0 +1,64 @@
+---
+# CI — runs on every push / PR. Works on github.com and GitHub Enterprise
+# (point runs-on at your GHE runner label if hosted runners are disabled).
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Ansible, lint tools and Python deps
+        run: |
+          pip install "ansible-core>=2.16,<2.19" ansible-lint pytest
+          pip install -r awx/requirements.txt
+          ansible-galaxy collection install -r workflow/requirements.yml
+
+      - name: Unit tests (version comparison)
+        run: python -m pytest -q workflow/scripts/tests
+
+      - name: ansible-lint (production profile)
+        run: |
+          ansible-lint workflow/playbooks/site.yml awx/bootstrap.yml \
+            workflow/roles/secret_server workflow/roles/servicenow workflow/roles/version_check \
+            workflow/roles/preflight workflow/roles/compliance_report \
+            workflow/roles/ios_firmware workflow/roles/dnac_firmware workflow/roles/sdwan_firmware \
+            workflow/roles/panos_firmware workflow/roles/f5_firmware
+
+      - name: Syntax check every inventory
+        working-directory: workflow
+        run: |
+          for inv in inventory/hosts.yml inventory/dev.yml inventory/demo.yml; do
+            ansible-playbook playbooks/site.yml -i "$inv" --syntax-check
+          done
+
+      - name: End-to-end rehearsal on the simulated inventory (audit -> CAB -> apply -> close)
+        working-directory: workflow
+        env:
+          SNOW_MODE: mock
+        run: |
+          ansible-playbook playbooks/site.yml -i inventory/demo.yml
+          ansible-playbook playbooks/site.yml -i inventory/demo.yml -e apply_updates=true
+          CHG=$(python3 scripts/mock_snow.py list | awk '{print $1}' | tail -1)
+          python3 scripts/mock_snow.py approve "$CHG"
+          ansible-playbook playbooks/site.yml -i inventory/demo.yml -e apply_updates=true -e snow_change_number="$CHG"
+          python3 scripts/mock_snow.py show "$CHG" | grep -q '"state": "closed"'
+
+      - name: Keep the reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compliance-reports
+          path: workflow/reports/
