@@ -47,6 +47,8 @@
         injectors:
           env:
             BWS_ACCESS_TOKEN: "{% raw %}{{ access_token }}{% endraw %}"
+            # EU-hosted orgs: -e fc_bws_server_url=https://vault.bitwarden.eu
+            BWS_SERVER_URL: "{{ fc_bws_server_url | default('https://vault.bitwarden.com') }}"
             CREDENTIAL_SOURCE: bitwarden_sm
 
     - name: Credential type — Delinea Secret Server

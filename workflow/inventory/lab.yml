@@ -2,9 +2,13 @@
 # LAB inventory — real EVE-NG devices on the lab management network,
 # reached from AWX over the Tailscale subnet route (192.168.122.0/24).
 #
-#   credentials : credential_source=vault -> `vault_device_credentials`
-#                 (username/password/enable). Supply it as AWX inventory
-#                 variables or an ansible-vault file; never commit secrets.
+#   credentials : Bitwarden Secrets Manager (project "firmware-compliance",
+#                 EU server). BWS_ACCESS_TOKEN/BWS_SERVER_URL are injected by the
+#                 AWX credential "Bitwarden Secrets Manager - dev"; each host's
+#                 bws_secret_id points at a secret whose VALUE is JSON:
+#                   {"username": "netauto", "password": "...", "enable": "..."}
+#                 Break-glass: -e credential_source=vault with
+#                 vault_device_credentials.default (no secrets in git).
 #   golden      : ios_golden_override pins the lab golden to the vIOS
 #                 release so R1 audits OK and SW1 (older vios_l2) shows DRIFT.
 #   ServiceNow  : not needed for audit; apply stays simulated in the lab.
@@ -13,7 +17,7 @@
 # =====================================================================
 all:
   vars:
-    credential_source: vault
+    credential_source: "{{ lookup('env', 'CREDENTIAL_SOURCE') | default('bitwarden_sm', true) }}"
     simulate_apply_only: true
     # Lab window: always open so the apply path can be rehearsed any time.
     maint_days: [1, 2, 3, 4, 5, 6, 7]
@@ -23,8 +27,8 @@ all:
   children:
     ios:
       hosts:
-        lab-r1:  { ansible_host: 192.168.122.51 }   # EVE-NG node R1  (vIOS 15.9(3)M10)
-        lab-sw1: { ansible_host: 192.168.122.52 }   # EVE-NG node SW1 (vIOS-L2 15.2 experimental)
+        lab-r1:  { ansible_host: 192.168.122.51, bws_secret_id: "5917d7bf-4a0f-4706-8c43-b4f600fded4a" }   # EVE-NG node R1  (vIOS 15.9(3)M10)
+        lab-sw1: { ansible_host: 192.168.122.52, bws_secret_id: "5917d7bf-4a0f-4706-8c43-b4f600fded4a" }   # EVE-NG node SW1 (vIOS-L2 15.2 experimental)
       vars:
         ansible_network_os: cisco.ios.ios
         ansible_connection: ansible.netcommon.network_cli
