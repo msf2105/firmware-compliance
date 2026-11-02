@@ -18,7 +18,7 @@
 - name: Compare running version against golden / latest
   ansible.builtin.command:
     argv: >-
-      {{ ['python3', playbook_dir ~ '/../scripts/firmware_check.py',
+      {{ [ansible_playbook_python, playbook_dir ~ '/../scripts/firmware_check.py',
           '--platform', vc_platform,
           '--running', vc_running | string,
           '--host', inventory_hostname,

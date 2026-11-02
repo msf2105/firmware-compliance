@@ -10,4 +10,4 @@ objectpath                   # f5networks.f5_modules
 jmespath
 netaddr
 ansible-pylibssh             # fast network_cli transport
-paramiko
+paramiko>=3.4,<4           # paramiko 4 dropped SHA1 kex (dh-group14-sha1) that IOS 15.x / vIOS lab devices require

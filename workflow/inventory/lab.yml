@@ -1,0 +1,40 @@
+# =====================================================================
+# LAB inventory — real EVE-NG devices on the lab management network,
+# reached from AWX over the Tailscale subnet route (192.168.122.0/24).
+#
+#   credentials : credential_source=vault -> `vault_device_credentials`
+#                 (username/password/enable). Supply it as AWX inventory
+#                 variables or an ansible-vault file; never commit secrets.
+#   golden      : ios_golden_override pins the lab golden to the vIOS
+#                 release so R1 audits OK and SW1 (older vios_l2) shows DRIFT.
+#   ServiceNow  : not needed for audit; apply stays simulated in the lab.
+#
+#   ansible-playbook playbooks/site.yml -i inventory/lab.yml
+# =====================================================================
+all:
+  vars:
+    credential_source: vault
+    simulate_apply_only: true
+    # Lab window: always open so the apply path can be rehearsed any time.
+    maint_days: [1, 2, 3, 4, 5, 6, 7]
+    maint_start_hour: 0
+    maint_end_hour: 0
+
+  children:
+    ios:
+      hosts:
+        lab-r1:  { ansible_host: 192.168.122.51 }   # EVE-NG node R1  (vIOS 15.9(3)M10)
+        lab-sw1: { ansible_host: 192.168.122.52 }   # EVE-NG node SW1 (vIOS-L2 15.2 experimental)
+      vars:
+        ansible_network_os: cisco.ios.ios
+        ansible_connection: ansible.netcommon.network_cli
+        # vIOS 15.x only offers SHA1 kex (dh-group14-sha1) and ssh-rsa host keys;
+        # paramiko>=4 dropped SHA1 kex; the EE (>=1.1) pins paramiko 3.x and uses it here.
+        ansible_network_cli_ssh_type: paramiko
+        ios_golden_override:
+          version: "15.9(3)M10"
+          image_file: "vios-adventerprisek9-m.SPA.159-3.M10"
+          image_disk: "flash0:"
+          image_server: "http://192.168.122.1/images"
+          image_md5: ""
+          cisco_pid: "IOSV"
