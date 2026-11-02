@@ -8,4 +8,4 @@ metadata:
 spec:
   service_type: nodeport
   nodeport_port: 30080
-  postgres_storage_class: local-path   # k3s default storage class
+  postgres_storage_class: standard   # minikube default storage class (local-path is k3s-only)

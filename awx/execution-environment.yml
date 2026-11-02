@@ -14,13 +14,9 @@ version: 3
 
 images:
   base_image:
-    name: quay.io/ansible/awx-ee:24.6.1
+    name: quay.io/ansible/awx-ee:latest
 
 dependencies:
-  ansible_core:
-    package_pip: ansible-core>=2.16,<2.19
-  ansible_runner:
-    package_pip: ansible-runner
   galaxy: collections-requirements.yml   # copied from workflow/requirements.yml by build-ee.sh
   python: requirements.txt
   system:
