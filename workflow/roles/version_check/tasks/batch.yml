@@ -9,7 +9,7 @@
 - name: Compare managed-device versions in one batch
   ansible.builtin.command:
     argv:
-      - python3
+      - "{{ ansible_playbook_python }}"
       - "{{ playbook_dir }}/../scripts/firmware_check.py"
       - --inventory-json
       - "{{ _inv | to_json }}"

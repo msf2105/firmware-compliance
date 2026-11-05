@@ -21,7 +21,7 @@
 - name: Evaluate version compliance (smart comparison via firmware_check.py)
   ansible.builtin.command:
     cmd: >-
-      python3 {{ playbook_dir }}/../scripts/firmware_check.py
+      {{ ansible_playbook_python }} {{ playbook_dir }}/../scripts/firmware_check.py
       --platform ise --running "{{ running_version }}" --host "{{ inventory_hostname }}"
       --yaml {{ playbook_dir }}/../vars/golden_versions.yml
       {{ ('--product-id ' ~ golden_versions.ise.cisco_pid) if golden_versions.ise.cisco_pid is defined else '' }}
